@@ -1,0 +1,21 @@
+[package]
+name = "gip10000-sender"
+version = "0.1.0"
+authors = ["ololoshka2871"]
+edition = "2018"
+readme = "README.md"
+resolver="2"
+
+[dependencies]
+nokhwa = { version = "0.9.4" }
+glium = "0.30.0"
+glutin = "0.27.0"
+flume = "0.10.9"
+structopt = { version = "0.3", default-features = false }
+serialport = { version = "4.2", default-features = false }
+bytes = { version = "1", default-features = false }
+
+[features]
+# -uvc -msmf
+# gst - universal for win and linux
+default = ["nokhwa/default", "nokhwa/output-threaded", "nokhwa/input-gst"]
