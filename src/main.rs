@@ -297,18 +297,33 @@ fn run_glium(recv: Receiver<Vec<u8>>, dimensions: (u32, u32), name: String) {
     })
 }
 
+/// Структура фреймбуфера в памяти МК
+/// 0       | 0
+/// 1       | 1
+/// 2       | 2
+/// ...     | ...
+/// 98      | 98
+/// 99      | 99
+/// dummy0  | dummy0
+/// dummy1  | dummy1
+/// 102 bit -> 13 byte
+///
+/// Поверем на 90 градусов - это будут строки
+/// каждые 100 реальных пикселей надо добить двумя пустыми битами
+/// всего должно получиться 1300 байт.
 fn gip_sender(port: String, rx: Receiver<Vec<u8>>, tx: Sender<Vec<u8>>, black: u8) {
+    const BLOCK_SIZE: usize = 64;
+    const BLOCK_SIZE_PYLOAD: usize = BLOCK_SIZE - std::mem::size_of::<u16>();
+
     let mut port = serialport::new(port, 15000000)
         .timeout(Duration::from_millis(5))
         .open()
         .expect("Failed to open port");
 
-    const BLOCK_SIZE: usize = 64;
-    const BLOCK_SIZE_PYLOAD: usize = BLOCK_SIZE - std::mem::size_of::<u16>();
-
     loop {
         let frame = rx.recv().unwrap();
 
+        /*
         let bin_data = frame
             .chunks_exact(3 * 8)
             .map(|pixels| {
@@ -320,6 +335,21 @@ fn gip_sender(port: String, rx: Receiver<Vec<u8>>, tx: Sender<Vec<u8>>, black: u
                 });
                 res
             })
+            .collect::<Vec<_>>();
+        */
+
+        let bin_data = frame
+            .chunks(3 * 100) // RGB(3 bytes) * 100 pixels ->[map to]-> 13 bytes
+            .map(|pixels| {
+                let mut res = [0u8; 13];
+                pixels.iter().step_by(3).enumerate().for_each(|(i, p)| {
+                    if *p > black {
+                        res[i / 8] |= 1 << (7 - (i % 8))
+                    }
+                });
+                res
+            })
+            .flatten()
             .collect::<Vec<_>>();
 
         bin_data
