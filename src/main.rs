@@ -323,21 +323,6 @@ fn gip_sender(port: String, rx: Receiver<Vec<u8>>, tx: Sender<Vec<u8>>, black: u
     loop {
         let frame = rx.recv().unwrap();
 
-        /*
-        let bin_data = frame
-            .chunks_exact(3 * 8)
-            .map(|pixels| {
-                let mut res = 0u8;
-                pixels.iter().step_by(3).enumerate().for_each(|(i, p)| {
-                    if *p > black {
-                        res |= 1 << (7 - (i % 8))
-                    }
-                });
-                res
-            })
-            .collect::<Vec<_>>();
-        */
-
         let bin_data = frame
             .chunks(3 * 100) // RGB(3 bytes) * 100 pixels ->[map to]-> 13 bytes
             .map(|pixels| {
@@ -363,6 +348,8 @@ fn gip_sender(port: String, rx: Receiver<Vec<u8>>, tx: Sender<Vec<u8>>, black: u
 
                 port.write_all(&buf).unwrap();
             });
+
+        port.write_all(&[0xff, 0xff]).unwrap();
 
         let _ = tx.send(frame);
     }
