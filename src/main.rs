@@ -349,7 +349,7 @@ fn gip_sender(port: String, rx: Receiver<Vec<u8>>, tx: Sender<Vec<u8>>, black: u
                 port.write_all(&buf).unwrap();
             });
 
-        port.write_all(&[0xff, 0xff]).unwrap();
+        port.write_all(&[0xff, 0xff]).unwrap(); // commit, swap buffers
 
         let _ = tx.send(frame);
     }
