@@ -23,7 +23,15 @@ use glium::{
     IndexBuffer, Surface, Texture2d, VertexBuffer,
 };
 use glutin::{event_loop::EventLoop, window::WindowBuilder, ContextBuilder};
-use nokhwa::{query_devices, Camera, CaptureAPIBackend, FrameFormat};
+use nokhwa::{
+    pixel_format::LumaFormat,
+    query,
+    utils::{
+        ApiBackend, CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType,
+        Resolution,
+    },
+    Camera,
+};
 use std::{process::exit, time::Duration};
 use structopt::StructOpt;
 
@@ -33,35 +41,32 @@ pub struct Vertex {
     tex_coords: [f32; 2],
 }
 
-fn capturer(camera_indes: usize, channel: Sender<Vec<u8>>, w: u32, h: u32, black: i16, white: i16) {
-    let mut camera = Camera::new_with(
-        camera_indes,
-        w,
-        h,
-        30,
-        FrameFormat::YUYV,
-        CaptureAPIBackend::GStreamer,
-    )
-    .unwrap();
+fn capturer(
+    camera_indes: u32,
+    channel: Sender<Vec<u8>>,
+    w: u32,
+    h: u32,
+    black: i16,
+    white: i16,
+    fps: u32,
+) {
+    let format = RequestedFormat::new::<LumaFormat>(RequestedFormatType::Closest(
+        CameraFormat::new(Resolution::new(w, h), FrameFormat::YUYV, fps),
+    ));
+
+    let mut camera = Camera::new(CameraIndex::Index(camera_indes), format).unwrap();
 
     // open stream
     camera.open_stream().unwrap();
     loop {
-        if let Ok(frame) = camera.frame_raw() {
+        if let Ok(frame) = camera.frame() {
             // frame - RGB frame
-            let grayscale_frame = frame
-                .chunks_exact(3)
-                .map(|rgb| {
-                    let r = rgb[0] as u16;
-                    let g = rgb[1] as u16;
-                    let b = rgb[2] as u16;
+            let frame = frame.decode_image::<LumaFormat>().unwrap();
 
-                    let mut pixel = (r + g + b) / 3;
-                    if pixel > 255 {
-                        pixel = 255;
-                    }
-                    pixel as u8
-                })
+            // convert frame to grayscale buffer of pixels
+            let grayscale_frame = frame
+                .enumerate_pixels()
+                .map(|(_x, _y, pixel)| pixel.0[0])
                 .collect::<Vec<_>>();
 
             let matrix = [[-1, 3], [3, 2i16]];
@@ -87,6 +92,46 @@ fn image_dithering<const M: usize, const N: usize>(
     black: i16,
     white: i16,
 ) -> Vec<u8> {
+    fn iterate_diffusion_matrix<const M: usize, const N: usize>(
+        xres: usize,
+        yres: usize,
+        x: usize,
+        y: usize,
+        convert_buf: &mut [i16],
+        pixel: i16,
+        error: i16,
+        dithering_matrix: [[i16; M]; N],
+
+        black: i16,
+        white: i16,
+    ) {
+        for i in 0..M {
+            /* diffusion matrix column */
+            for j in 0..N {
+                /* skip pixels out of zone */
+                if (x + i >= xres) || (y + j >= yres) {
+                    continue;
+                }
+                let write_pos = &mut convert_buf[(y + j) * xres + x + i];
+                let coeff = dithering_matrix[i][j];
+                if -1 == coeff {
+                    /* pixel itself */
+                    *write_pos = pixel;
+                } else {
+                    let mut p = *write_pos + error * coeff;
+
+                    if p > white {
+                        p = white;
+                    }
+                    if p < black {
+                        p = white;
+                    }
+                    *write_pos = p;
+                }
+            }
+        }
+    }
+
     #[allow(unused)]
     static GAMMA_CORRECTION_TABLE: [i16; 256] = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2,
@@ -155,46 +200,6 @@ fn image_dithering<const M: usize, const N: usize>(
         .map(|p| [p as u8, p as u8, p as u8])
         .flatten()
         .collect()
-}
-
-fn iterate_diffusion_matrix<const M: usize, const N: usize>(
-    xres: usize,
-    yres: usize,
-    x: usize,
-    y: usize,
-    convert_buf: &mut [i16],
-    pixel: i16,
-    error: i16,
-    dithering_matrix: [[i16; M]; N],
-
-    black: i16,
-    white: i16,
-) {
-    for i in 0..M {
-        /* diffusion matrix column */
-        for j in 0..N {
-            /* skip pixels out of zone */
-            if (x + i >= xres) || (y + j >= yres) {
-                continue;
-            }
-            let write_pos = &mut convert_buf[(y + j) * xres + x + i];
-            let coeff = dithering_matrix[i][j];
-            if -1 == coeff {
-                /* pixel itself */
-                *write_pos = pixel;
-            } else {
-                let mut p = *write_pos + error * coeff;
-
-                if p > white {
-                    p = white;
-                }
-                if p < black {
-                    p = white;
-                }
-                *write_pos = p;
-            }
-        }
-    }
 }
 
 fn run_glium(recv: Receiver<Vec<u8>>, dimensions: (u32, u32), name: String) {
@@ -297,23 +302,9 @@ fn run_glium(recv: Receiver<Vec<u8>>, dimensions: (u32, u32), name: String) {
     })
 }
 
-/// Структура фреймбуфера в памяти МК
-/// 0       | 0
-/// 1       | 1
-/// 2       | 2
-/// ...     | ...
-/// 98      | 98
-/// 99      | 99
-/// dummy0  | dummy0
-/// dummy1  | dummy1
-/// 102 bit -> 13 byte
-///
-/// Поверем на 90 градусов - это будут строки
-/// каждые 100 реальных пикселей надо добить двумя пустыми битами
-/// всего должно получиться 1300 байт.
-fn gip_sender(port: String, rx: Receiver<Vec<u8>>, tx: Sender<Vec<u8>>, black: u8) {
+fn display_sender(port: String, rx: Receiver<Vec<u8>>, tx: Sender<Vec<u8>>, black: u8) {
     const BLOCK_SIZE: usize = 64;
-    const BLOCK_SIZE_PYLOAD: usize = BLOCK_SIZE - std::mem::size_of::<u16>();
+    const BLOCK_SIZE_PYLOAD: usize = BLOCK_SIZE - std::mem::size_of::<u32>();
 
     let mut port = serialport::new(port, 15000000)
         .timeout(Duration::from_millis(5))
@@ -324,17 +315,17 @@ fn gip_sender(port: String, rx: Receiver<Vec<u8>>, tx: Sender<Vec<u8>>, black: u
         let frame = rx.recv().unwrap();
 
         let bin_data = frame
-            .chunks(3 * 100) // RGB(3 bytes) * 100 pixels ->[map to]-> 13 bytes
+            .chunks(3 * 8) // RGB(3 bytes) * 8 pixels ->[map to]-> 1 byte
             .map(|pixels| {
-                let mut res = [0u8; 13];
-                pixels.iter().step_by(3).enumerate().for_each(|(i, p)| {
-                    if *p > black {
-                        res[i / 8] |= 1 << (7 - (i % 8))
+                let mut res = 0u8;
+                for (i, pixel) in pixels.chunks(3).enumerate() {
+                    let pixel = pixel[0] as u16 + pixel[1] as u16 + pixel[2] as u16;
+                    if pixel > black as u16 * 3 {
+                        res |= 1 << (7 - i);
                     }
-                });
+                }
                 res
             })
-            .flatten()
             .collect::<Vec<_>>();
 
         bin_data
@@ -343,32 +334,37 @@ fn gip_sender(port: String, rx: Receiver<Vec<u8>>, tx: Sender<Vec<u8>>, black: u
             .for_each(|(i, data)| {
                 let offset = i * BLOCK_SIZE_PYLOAD;
                 let mut buf: BytesMut = BytesMut::new();
-                buf.put_u16(offset as u16);
+                // offset in bytes
+                buf.put_u32_le(offset as u32 / 8);
                 buf.put_slice(data);
 
                 port.write_all(&buf).unwrap();
             });
-
-        port.write_all(&[0xff, 0xff]).unwrap(); // commit, swap buffers
 
         let _ = tx.send(frame);
     }
 }
 
 #[derive(Debug, StructOpt)]
-#[structopt(about = "Send image from OBS virtual camera to GIP10000 over virtual serial port")]
+#[structopt(
+    about = "Send image from OBS virtual camera to el320x240_36hb over virtual serial port"
+)]
 struct Cli {
     /// camera ID
     #[structopt(short, default_value = "0")]
-    id: usize,
+    id: u32,
 
     /// width
-    #[structopt(long, default_value = "100")]
+    #[structopt(long, default_value = "320")]
     width: u32,
 
     /// heigth
-    #[structopt(long, default_value = "100")]
+    #[structopt(long, default_value = "240")]
     heigth: u32,
+
+    /// fps
+    #[structopt(long, default_value = "40")]
+    fps: u32,
 
     /// Serial port
     #[structopt(short, default_value = "/dev/ttyACM0")]
@@ -381,6 +377,10 @@ struct Cli {
     /// level of white color
     #[structopt(default_value = "255")]
     white_lvl: u8,
+
+    /// list available cameras
+    #[structopt(short)]
+    list: bool,
 }
 
 fn main() {
@@ -391,27 +391,33 @@ fn main() {
     let camera_id = args.id;
     let black = args.black_lvl as i16;
     let white = args.white_lvl as i16;
+    let fps = args.fps;
 
-    let cameras = query_devices(CaptureAPIBackend::GStreamer).unwrap();
+    nokhwa::nokhwa_initialize(|_| {});
+
+    let cameras = query(ApiBackend::Auto).unwrap();
+
+    if args.list {
+        println!("Found cameras:");
+        cameras
+            .iter()
+            .for_each(|cam| println!("{}: {}", cam.index(), cam.human_name()));
+        exit(0);
+    }
 
     if cameras.is_empty() {
         println!("No web-cameras found!");
         exit(1);
     }
 
-    println!("Found cameras:");
-    cameras
-        .iter()
-        .for_each(|cam| println!("{}: {}", cam.index(), cam.human_name()));
-
     let (capture, gip_send) = flume::unbounded();
     let (gip_sent, recv) = flume::unbounded();
 
     // start capture thread
-    std::thread::spawn(move || capturer(camera_id, capture, width, height, black, white));
+    std::thread::spawn(move || capturer(camera_id, capture, width, height, black, white, fps));
 
-    std::thread::spawn(move || gip_sender(args.port, gip_send, gip_sent, black as u8));
+    std::thread::spawn(move || display_sender(args.port, gip_send, gip_sent, black as u8));
 
     // run glium
-    run_glium(recv, (width, height), format!("Camera: {}", camera_id));
+    run_glium(recv, (width, height), format!("Camera: {camera_id}"));
 }
