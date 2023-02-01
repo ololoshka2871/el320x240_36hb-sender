@@ -17,7 +17,7 @@
             "type": "lldb",
             "request": "launch",
             "program": "target/release/el320x240_36hb-sender",
-            "args": ["-p", "/dev/ttyACM1"],
+            "args": ["-p", "/dev/ttyACM0"],
             "cwd": "${workspaceFolder}",
         }
     ]
