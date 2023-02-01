@@ -49,6 +49,7 @@ fn capturer(
     black: i16,
     white: i16,
     fps: u32,
+    dithering: bool,
 ) {
     let format = RequestedFormat::new::<LumaFormat>(RequestedFormatType::Closest(
         CameraFormat::new(Resolution::new(w, h), FrameFormat::YUYV, fps),
@@ -68,16 +69,30 @@ fn capturer(
                 .enumerate_pixels()
                 .map(|(_x, _y, pixel)| pixel.0[0])
                 .collect::<Vec<_>>();
+            let df = if dithering {
+                let matrix = [[-1, 3], [3, 2i16]];
+                image_dithering(
+                    &grayscale_frame,
+                    matrix,
+                    w as usize,
+                    h as usize,
+                    black,
+                    white,
+                )
+            } else {
+                grayscale_frame
+                    .into_iter()
+                    .map(|x| {
+                        if x as i16 > black {
+                            [0xff, 0xff, 0xff]
+                        } else {
+                            [0x00, 0x00, 0x00]
+                        }
+                    })
+                    .flatten()
+                    .collect::<Vec<_>>()
+            };
 
-            let matrix = [[-1, 3], [3, 2i16]];
-            let df = image_dithering(
-                &grayscale_frame,
-                matrix,
-                w as usize,
-                h as usize,
-                black,
-                white,
-            );
             let _send = channel.send(df);
         }
     }
@@ -335,7 +350,7 @@ fn display_sender(port: String, rx: Receiver<Vec<u8>>, tx: Sender<Vec<u8>>, blac
                 let offset = i * BLOCK_SIZE_PYLOAD;
                 let mut buf: BytesMut = BytesMut::new();
                 // offset in bytes
-                buf.put_u32_le(offset as u32 / 8);
+                buf.put_u32_le(offset as u32);
                 buf.put_slice(data);
 
                 port.write_all(&buf).unwrap();
@@ -363,18 +378,22 @@ struct Cli {
     heigth: u32,
 
     /// fps
-    #[structopt(long, default_value = "40")]
+    #[structopt(long, default_value = "30")]
     fps: u32,
 
     /// Serial port
     #[structopt(short, default_value = "/dev/ttyACM0")]
     port: String,
 
-    /// level of black color
+    /// use dithering
+    #[structopt(short)]
+    dither: bool,
+
+    /// level of black color, 0-255
     #[structopt(default_value = "0")]
     black_lvl: u8,
 
-    /// level of white color
+    /// level of white color, 0-255
     #[structopt(default_value = "255")]
     white_lvl: u8,
 
@@ -389,9 +408,17 @@ fn main() {
     let width = args.width as u32;
     let height = args.heigth as u32;
     let camera_id = args.id;
-    let black = args.black_lvl as i16;
+    let mut black = args.black_lvl as i16;
     let white = args.white_lvl as i16;
     let fps = args.fps;
+    let dithering = args.dither;
+
+    if !dithering {
+        println!("Dithering is disabled");
+        if black == 0 {
+            black = 0xff / 2;
+        }
+    }
 
     nokhwa::nokhwa_initialize(|_| {});
 
@@ -414,7 +441,11 @@ fn main() {
     let (gip_sent, recv) = flume::unbounded();
 
     // start capture thread
-    std::thread::spawn(move || capturer(camera_id, capture, width, height, black, white, fps));
+    std::thread::spawn(move || {
+        capturer(
+            camera_id, capture, width, height, black, white, fps, dithering,
+        )
+    });
 
     std::thread::spawn(move || display_sender(args.port, gip_send, gip_sent, black as u8));
 
