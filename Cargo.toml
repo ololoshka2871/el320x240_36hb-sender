@@ -27,3 +27,7 @@ fps_counter = "2.0"
 
 [profile.release]
 debug = true # добавлять отладочные символы. Не влияет на размер исполняемого кода, зато работает дебаг
+
+[features]
+default = ["diffuse8x8"]
+diffuse8x8 = []

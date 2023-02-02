@@ -37,15 +37,16 @@ var s_diffuse: sampler;
 var s_cam: sampler;
 
 // diffusion matrix
-@group(0) @binding(4) var<storage, read> index_matrix: array<u32>;
+@group(0) @binding(4) var<storage, read> dithering_matrix: array<u32>;
 
 fn indexValue(position: vec2<f32>) -> f32 {
-    let matrix_size = arrayLength(&index_matrix) / 2u;
+    let matrix_size = arrayLength(&dithering_matrix);
+    let matrix_dim = u32(sqrt(f32(matrix_size)));
 
-    var x = u32(position.x) % matrix_size;
-    var y = u32(position.y) % matrix_size;
+    var x = u32(position.x) % matrix_dim;
+    var y = u32(position.y) % matrix_dim;
 
-    return f32(index_matrix[x + y * matrix_size]) / 16.0;
+    return f32(dithering_matrix[x + y * matrix_dim]) / f32(matrix_size);
 }
 
 fn dither(position: vec2<f32>, color: f32) -> f32 {

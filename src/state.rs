@@ -63,7 +63,8 @@ impl State {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    features: wgpu::Features::BUFFER_BINDING_ARRAY | wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY,
+                    features: wgpu::Features::BUFFER_BINDING_ARRAY
+                        | wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY,
                     // WebGL doesn't support all of wgpu's features, so if
                     // we're building for the web we'll have to disable some.
                     limits: wgpu::Limits::default(),
@@ -102,14 +103,34 @@ impl State {
             "Camera frame texture",
         );
 
-        let duffusion_matrix = [0u32, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+        // if feature diffuse8x8 is enabled use duffusion_matrix 8x8 elese use 4x4
+        #[cfg(not(feature = "diffuse8x8"))]
+        let dithering_matrix = [
+            0u32, 8, 2, 10, // row 0
+            12, 4, 14, 6, // row 1
+            3, 11, 1, 9, // row 2
+            15, 7, 13, 5, // row 3
+        ];
+
+        #[cfg(feature = "diffuse8x8")]
+        let dithering_matrix = [
+            0, 32, 8, 40, 2, 34, 10, 42, // row 0
+            48, 16, 56, 24, 50, 18, 58, 26, // row 1
+            12, 44, 4, 36, 14, 46, 6, 38, // row 2
+            60, 28, 52, 20, 62, 30, 54, 22, // row 3
+            3, 35, 11, 43, 1, 33, 9, 41, // row 4
+            51, 19, 59, 27, 49, 17, 57, 25, // row 5
+            15, 47, 7, 39, 13, 45, 5, 37, // row 6
+            63, 31, 55, 23, 61, 29, 53, 21, // row 7
+        ];
 
         // create uniform from duffusion_matrix
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform buffer"),
-            contents: bytemuck::cast_slice(&duffusion_matrix),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
+        let dithering_matrix_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("duffusion_matrix buffer"),
+                contents: bytemuck::cast_slice(&dithering_matrix),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
 
         // Создаем группу биндингов для текстуры
         let texture_bind_group_layout =
@@ -153,7 +174,7 @@ impl State {
                         binding: 4,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage{ read_only: true },
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -185,11 +206,10 @@ impl State {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    // uniform_buffer uniform
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &uniform_buffer,
+                        buffer: &dithering_matrix_buffer,
                         offset: 0,
-                        size: std::num::NonZeroU64::new(uniform_buffer.size()),
+                        size: std::num::NonZeroU64::new(dithering_matrix_buffer.size()),
                     }),
                 },
             ],
