@@ -63,7 +63,7 @@ impl State {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    features: wgpu::Features::empty(),
+                    features: wgpu::Features::BUFFER_BINDING_ARRAY | wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY,
                     // WebGL doesn't support all of wgpu's features, so if
                     // we're building for the web we'll have to disable some.
                     limits: wgpu::Limits::default(),
@@ -101,6 +101,15 @@ impl State {
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             "Camera frame texture",
         );
+
+        let duffusion_matrix = [0u32, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+
+        // create uniform from duffusion_matrix
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Uniform buffer"),
+            contents: bytemuck::cast_slice(&duffusion_matrix),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
 
         // Создаем группу биндингов для текстуры
         let texture_bind_group_layout =
@@ -140,6 +149,16 @@ impl State {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage{ read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: std::num::NonZeroU32::new(1),
+                    },
                 ],
                 label: Some("texture_bind_group_layout"),
             });
@@ -163,6 +182,15 @@ impl State {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&camera_texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    // uniform_buffer uniform
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &uniform_buffer,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(uniform_buffer.size()),
+                    }),
                 },
             ],
             label: Some("diffuse_bind_group"),

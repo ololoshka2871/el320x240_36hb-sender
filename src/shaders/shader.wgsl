@@ -36,11 +36,31 @@ var s_diffuse: sampler;
 @group(0) @binding(3)
 var s_cam: sampler;
 
+// diffusion matrix
+@group(0) @binding(4) var<storage, read> index_matrix: array<u32>;
+
+fn indexValue(position: vec2<f32>) -> f32 {
+    let matrix_size = arrayLength(&index_matrix) / 2u;
+
+    var x = u32(position.x) % matrix_size;
+    var y = u32(position.y) % matrix_size;
+
+    return f32(index_matrix[x + y * matrix_size]) / 16.0;
+}
+
+fn dither(position: vec2<f32>, color: f32) -> f32 {
+    var closestColor: f32;
+    if color < 0.5 { closestColor = 0.0; } else { closestColor = 1.0; };
+    var secondClosestColor = 1.0 - closestColor;
+    var d = indexValue(position);
+    var distance = abs(closestColor - color);
+    if distance < d { return closestColor; } else { return secondClosestColor; };
+}
+
 // Mark the entry point as posible entry point for the fragment shader
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var gray = textureSample(cam_diffuse, s_cam, in.tex_coords);
-    return gray;
-    //return vec4<f32>(gray.x, gray.x, gray.x, 1.0);
-    //return textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    var res = dither(vec2<f32>(in.clip_position.x, in.clip_position.y), gray.r);
+    return vec4<f32>(res, res, res, 1.0);
 }
