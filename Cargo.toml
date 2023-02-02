@@ -6,10 +6,11 @@ edition = "2018"
 readme = "README.md"
 resolver="2"
 
+[lib]
+crate-type = ["rlib"]
+
 [dependencies]
 nokhwa = { version = "0.10.3", features = ["input-native"] }
-glium = "0.30"
-glutin = "0.27"
 flume = "0.10.9"
 structopt = { version = "0.3", default-features = false }
 serialport = { version = "4.2", default-features = false }
@@ -20,6 +21,8 @@ futures = "0.3.25"
 env_logger = "0.10"
 pollster = "0.2.5"
 bytemuck = { version = "1.13", features = ["derive"] }
+image = { version = "0.24", default-features = false, features = ["png"] }
+anyhow = "1.0"
 
 [profile.release]
 debug = true # добавлять отладочные символы. Не влияет на размер исполняемого кода, зато работает дебаг
