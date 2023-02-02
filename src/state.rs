@@ -1,5 +1,7 @@
+use core::default::Default;
 use std::iter;
 
+use nokhwa::pixel_format;
 use wgpu::{util::DeviceExt, BindGroup, Buffer};
 use winit::{event::*, window::Window};
 
@@ -16,17 +18,23 @@ pub(crate) struct State {
     index_buffer: Buffer,
     diffuse_bind_group: BindGroup,
     _diffuse_texture: crate::texture::Texture,
+    camera_texture: crate::texture::Texture,
 
+    /*
     cs_pipeline: wgpu::ComputePipeline,
     cs_bind_group: BindGroup,
     _staging_buffer: Buffer,
     _storage_buffer: Buffer,
 
     numbers: Vec<u32>,
+    */
+    camera: nokhwa::Camera,
+
+    fps_counter: fps_counter::FPSCounter,
 }
 
 impl State {
-    pub(crate) async fn new(window: Window) -> Self {
+    pub(crate) async fn new(window: Window, camera: nokhwa::Camera) -> Self {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
@@ -71,7 +79,7 @@ impl State {
             format: format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: wgpu::PresentMode::Immediate,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![format],
         };
@@ -85,6 +93,14 @@ impl State {
         let diffuse_texture =
             crate::texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png")
                 .unwrap();
+
+        let camera_texture = crate::texture::Texture::empty(
+            &device,
+            (320, 240),
+            wgpu::TextureFormat::R8Unorm,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            "Camera frame texture",
+        );
 
         // Создаем группу биндингов для текстуры
         let texture_bind_group_layout =
@@ -103,8 +119,24 @@ impl State {
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
                         // This should match the filterable field of the
                         // corresponding Texture entry above.
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
@@ -122,7 +154,15 @@ impl State {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&camera_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
                     resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&camera_texture.sampler),
                 },
             ],
             label: Some("diffuse_bind_group"),
@@ -133,9 +173,11 @@ impl State {
         // load and complie shader from file (see shaders/shader.wgsl)
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/shader.wgsl"));
 
+        /*
         // compule shader from file (see shaders/compute_shader.wgsl)
         let cs_module =
             device.create_shader_module(wgpu::include_wgsl!("shaders/compute_shader.wgsl"));
+            */
 
         // create render pipeline layout
         let render_pipeline_layout =
@@ -193,11 +235,12 @@ impl State {
         });
 
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
+            label: "Index Buffer".into(),
             contents: bytemuck::cast_slice(crate::verticies::INDICES),
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        /*
         // test data
         let numbers = vec![1, 2, 3, 4];
 
@@ -241,6 +284,7 @@ impl State {
                 resource: storage_buffer.as_entire_binding(),
             }],
         });
+        */
 
         Self {
             surface,
@@ -254,13 +298,19 @@ impl State {
             index_buffer,
             diffuse_bind_group,
             _diffuse_texture: diffuse_texture,
+            camera_texture,
 
+            /*
             cs_pipeline,
             cs_bind_group,
             _staging_buffer: staging_buffer,
             _storage_buffer: storage_buffer,
 
             numbers,
+            */
+            camera,
+
+            fps_counter: fps_counter::FPSCounter::default(),
         }
     }
 
@@ -282,9 +332,38 @@ impl State {
         false
     }
 
-    pub(crate) fn update(&mut self) {}
+    pub(crate) fn update(&mut self) {
+        let fps = self.fps_counter.tick();
+        println!("FPS: {}", fps);
+    }
 
     pub(crate) fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        if let Ok(frame) = self.camera.frame() {
+            // frame - YUV frame
+            let frame = frame.decode_image::<pixel_format::LumaFormat>().unwrap();
+
+            // load data from diffuse_rgba to diffuse_texture allocated in GPU memory above
+            let dimensions = frame.dimensions();
+            self.queue.write_texture(
+                // Куда копировать данные
+                wgpu::ImageCopyTexture {
+                    aspect: wgpu::TextureAspect::All,
+                    texture: &self.camera_texture.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                },
+                // Источник данных
+                frame.as_raw(),
+                // Как копировать данные, преобразования форматов, например
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: std::num::NonZeroU32::new(dimensions.0),
+                    rows_per_image: std::num::NonZeroU32::new(dimensions.1),
+                },
+                self.camera_texture.texture.size(), // размер текстуры
+            );
+        }
+
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture

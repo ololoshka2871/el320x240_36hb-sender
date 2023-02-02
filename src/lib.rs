@@ -1,6 +1,6 @@
 mod state;
-mod verticies;
 mod texture;
+mod verticies;
 
 use winit::{
     event::*,
@@ -8,14 +8,35 @@ use winit::{
     window::WindowBuilder,
 };
 
+use nokhwa::utils::*;
+
 pub async fn run() {
     env_logger::init();
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
 
+    // We need to initialize Nokhwa before we can use it
+    nokhwa::nokhwa_initialize(|_| {});
+
+    let cameras = nokhwa::query(nokhwa::utils::ApiBackend::Auto).unwrap();
+    if cameras.is_empty() {
+        println!("No web-cameras found!");
+        std::process::exit(1);
+    }
+
+    // camera capture format
+    let format =
+        RequestedFormat::new::<nokhwa::pixel_format::LumaFormat>(RequestedFormatType::Closest(
+            CameraFormat::new(Resolution::new(320, 240), FrameFormat::YUYV, 30),
+        ));
+
+    // open camera
+    let mut camera = nokhwa::Camera::new(CameraIndex::Index(0), format).unwrap();
+    camera.open_stream().unwrap();
+
     // State::new uses async code, so we're going to wait for it to finish
-    let mut state = state::State::new(window).await;
+    let mut state = state::State::new(window, camera).await;
 
     event_loop.run(move |event, _, control_flow| {
         match event {

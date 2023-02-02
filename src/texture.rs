@@ -20,6 +20,59 @@ impl Texture {
         Self::from_image(device, queue, &img, Some(label))
     }
 
+    pub(crate) fn empty(
+        device: &wgpu::Device,
+        dimensions: (u32, u32),
+        format: wgpu::TextureFormat,
+        usage: wgpu::TextureUsages,
+        label: &str,
+    ) -> Self {
+        let size = wgpu::Extent3d {
+            width: dimensions.0,
+            height: dimensions.1,
+            depth_or_array_layers: 1,
+        };
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        });
+
+        // Это типо дескриптора текстуры, адаптер для того чтобы делать запросы к драйверу
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some(format!("{label}, view").as_str()),
+            format: Some(format),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: None,
+            base_array_layer: 0,
+            array_layer_count: None,
+        });
+        // Сэмплер - это конвертер текстурная координата -> цвет пикселя
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear, // Фильтр для увеличения, что делать если камера близко и надо вернуть цвет между физическими пикселями текстуры
+            min_filter: wgpu::FilterMode::Nearest, // Фильтр для уменьшения, что делать если камера далеко и в 1 фрагмент попадает сразу много физических пикселей текстуры
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        Self {
+            texture,
+            view,
+            sampler,
+        }
+    }
+
     pub(crate) fn from_image(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
