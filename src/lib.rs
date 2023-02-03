@@ -36,7 +36,8 @@ pub async fn run() {
     camera.open_stream().unwrap();
 
     // State::new uses async code, so we're going to wait for it to finish
-    let mut state = state::State::new(window, camera).await;
+    let mut state =
+        state::State::new(window, camera, winit::dpi::PhysicalSize::new(320, 240)).await;
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -74,7 +75,7 @@ pub async fn run() {
                     Ok(_) => {}
                     // Reconfigure the surface if it's lost or outdated
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        state.resize(state.size)
+                        state.resize(state.window_size)
                     }
                     // The system is out of memory, we should probably quit
                     Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,

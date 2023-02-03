@@ -1,0 +1,4 @@
+{
+    "wgsl-analyzer.diagnostics.typeErrors": true,
+    "wgsl-analyzer.diagnostics.nagaVersion": "main"
+}

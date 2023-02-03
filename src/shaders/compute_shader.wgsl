@@ -1,38 +1,51 @@
-@group(0)
-@binding(0)
-var<storage, read_write> v_indices: array<u32>; // this is used as both input and output for convenience
+// Текстура видео с камеры
+// из текстуры читаются u8 но в шейдере они u32
+@group(0) @binding(0) var cam_data: texture_2d<f32>;
 
-// The Collatz Conjecture states that for any integer n:
-// If n is even, n = n/2
-// If n is odd, n = 3n+1
-// And repeat this process for each new n, you will always eventually reach 1.
-// Though the conjecture has not been proven, no counterexample has ever been found.
-// This function returns how many times this recurrence needs to be applied to reach 1.
-fn collatz_iterations(n_base: u32) -> u32{
-    var n: u32 = n_base;
-    var i: u32 = 0u;
-    loop {
-        if (n <= 1u) {
-            break;
-        }
-        if (n % 2u == 0u) {
-            n = n / 2u;
-        }
-        else {
-            // Overflow? (i.e. 3*n + 1 > 0xffffffffu?)
-            if (n >= 1431655765u) {   // 0x55555555u
-                return 4294967295u;   // 0xffffffffu
-            }
+// Сэмплер камеры
+@group(0) @binding(1) var s_cam: sampler;
 
-            n = 3u * n + 1u;
-        }
-        i = i + 1u;
-    }
-    return i;
+// Dithering matrix
+@group(0) @binding(2) var<storage, read> dithering_matrix: array<u32>;
+
+// Output binary image
+//@group(0) @binding(3) var<storage, read_write> output_data: array<u32>;
+
+// Output texture
+// см таблицу https://gpuweb.github.io/gpuweb/#plain-color-formats какие форматы поддерживаются
+@group(1) @binding(0) var output_texture: texture_storage_2d<rgba8unorm, write>;
+
+//------------------------------------------------------------
+
+fn indexValue(position: vec2<f32>) -> f32 {
+    let matrix_size = arrayLength(&dithering_matrix);
+    let matrix_dim = u32(sqrt(f32(matrix_size)));
+
+    var x = u32(position.x) % matrix_dim;
+    var y = u32(position.y) % matrix_dim;
+
+    return f32(dithering_matrix[x + y * matrix_dim]) / f32(matrix_size);
+}
+
+fn dither(position: vec2<f32>, color: f32) -> f32 {
+    var closestColor: f32;
+    if color < 0.5 { closestColor = 0.0; } else { closestColor = 1.0; };
+    var secondClosestColor = 1.0 - closestColor;
+    var d = indexValue(position);
+    var distance = abs(closestColor - color);
+    if distance < d { return closestColor; } else { return secondClosestColor; };
 }
 
 @compute
-@workgroup_size(1)
+@workgroup_size(3, 3)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    v_indices[global_id.x] = collatz_iterations(v_indices[global_id.x]);
+    var point_coords = vec2<u32>(global_id.x, global_id.y);
+    var tex_coords = vec2<f32>(point_coords) / vec2<f32>(textureDimensions(output_texture));
+    var gray = textureSampleLevel(cam_data, s_cam, tex_coords, 0.0); // textureSamp() не разрешено в compute шейдерах
+    var res = dither(vec2<f32>(point_coords), gray.r);
+
+    // write to output texture 
+    textureStore(output_texture, vec2<i32>(i32(point_coords.x), i32(point_coords.y)), vec4<f32>(res, 0.0, 0.0, 1.0));
+
+    // todo: write to output binary image
 }

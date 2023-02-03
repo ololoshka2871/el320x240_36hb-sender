@@ -10,6 +10,7 @@ pub(crate) struct Texture {
 }
 
 impl Texture {
+    #[allow(unused)]
     pub(crate) fn from_bytes(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -73,6 +74,7 @@ impl Texture {
         }
     }
 
+    #[allow(unused)]
     pub(crate) fn from_image(
         device: &wgpu::Device,
         queue: &wgpu::Queue,

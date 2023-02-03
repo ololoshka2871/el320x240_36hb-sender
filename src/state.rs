@@ -3,39 +3,424 @@ use std::iter;
 
 use nokhwa::pixel_format;
 use wgpu::{util::DeviceExt, BindGroup, Buffer};
-use winit::{event::*, window::Window};
+use winit::{dpi::PhysicalSize, event::*, window::Window};
+
+use crate::texture::Texture;
+
+// if feature diffuse8x8 is enabled use duffusion_matrix 8x8 elese use 4x4
+#[cfg(not(feature = "diffuse8x8"))]
+const DITHERING_MATRIX: [u32; 16] = [
+    0u32, 8, 2, 10, // row 0
+    12, 4, 14, 6, // row 1
+    3, 11, 1, 9, // row 2
+    15, 7, 13, 5, // row 3
+];
+
+#[cfg(feature = "diffuse8x8")]
+const DITHERING_MATRIX: [u32; 64] = [
+    0, 32, 8, 40, 2, 34, 10, 42, // row 0
+    48, 16, 56, 24, 50, 18, 58, 26, // row 1
+    12, 44, 4, 36, 14, 46, 6, 38, // row 2
+    60, 28, 52, 20, 62, 30, 54, 22, // row 3
+    3, 35, 11, 43, 1, 33, 9, 41, // row 4
+    51, 19, 59, 27, 49, 17, 57, 25, // row 5
+    15, 47, 7, 39, 13, 45, 5, 37, // row 6
+    63, 31, 55, 23, 61, 29, 53, 21, // row 7
+];
 
 pub(crate) struct State {
     surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    pub(crate) size: winit::dpi::PhysicalSize<u32>,
+    pub(crate) window_size: winit::dpi::PhysicalSize<u32>,
     window: Window,
+    output_size: PhysicalSize<u32>,
+
+    camera_texture: crate::texture::Texture,
+    camera: nokhwa::Camera,
+
+    compule_pipeline: wgpu::ComputePipeline,
+    output_buffer: Buffer,
+    cs_const_input_binding_group: BindGroup,
+    sc_output_binding_groups: Vec<BindGroup>,
 
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: Buffer,
     index_buffer: Buffer,
-    diffuse_bind_group: BindGroup,
-    _diffuse_texture: crate::texture::Texture,
-    camera_texture: crate::texture::Texture,
-
-    /*
-    cs_pipeline: wgpu::ComputePipeline,
-    cs_bind_group: BindGroup,
-    _staging_buffer: Buffer,
-    _storage_buffer: Buffer,
-
-    numbers: Vec<u32>,
-    */
-    camera: nokhwa::Camera,
+    fs_texture_bindings: Vec<BindGroup>,
+    fs_sampler_binding: BindGroup,
 
     fps_counter: fps_counter::FPSCounter,
+    frame_counter: usize,
 }
 
 impl State {
-    pub(crate) async fn new(window: Window, camera: nokhwa::Camera) -> Self {
-        let size = window.inner_size();
+    fn create_buffer<T: Sized + bytemuck::Pod>(
+        device: &wgpu::Device,
+        data: &[T],
+        name: &str,
+    ) -> Buffer {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(name),
+            contents: bytemuck::cast_slice(data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        })
+    }
+
+    fn create_output_buffered_binding(
+        device: &wgpu::Device,
+        binding_group_layout: &wgpu::BindGroupLayout,
+        texture: &Texture,
+        name: &str,
+    ) -> BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(name),
+            layout: binding_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&texture.view),
+            }],
+        })
+    }
+
+    fn create_compute_stage(
+        device: &wgpu::Device,
+        output_size: winit::dpi::PhysicalSize<u32>,
+        camera_texture: &Texture,
+        display_textures: &[Texture],
+    ) -> (wgpu::ComputePipeline, Buffer, BindGroup, Vec<BindGroup>) {
+        // Буффер для матрицы дизеринга
+        let dithering_matrix_buffer =
+            Self::create_buffer(&device, &DITHERING_MATRIX, "Output data");
+
+        // Пустой буффер для входных данных
+        let output_data_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ouitput data"),
+            size: (output_size.height * output_size.width * 8) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: true,
+        });
+
+        // Создание сэмплера для камеры
+        let camera_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Camera sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // Загрузка вычислительного шейдера
+        let cs_module =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/compute_shader.wgsl"));
+
+        // Создание группы привязки постоянных данных для вычислительного шейдера
+        let cs_const_biding_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Compute shader const binding layout"),
+                entries: &[
+                    // Входные данные c камеры
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // Сэмплер для входной текстуры
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // Матрица дизеринга
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    /*
+                    // Выходные данные
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    */
+                ],
+            });
+
+        // Создание группы привязки выходных данных для вычислительного шейдера (тут будет меняться текстура из display_textures)
+        let cs_output_buffered_binding_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Compute shader output binding layout"),
+                entries: &[
+                    // Выходная текстура после дизеринга
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        // Загрузка байндигов для вычислительного шейдера
+        let cs_const_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Compute shader const binding"),
+            layout: &cs_const_biding_layout,
+            entries: &[
+                // Входные данные c камеры
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&camera_texture.view),
+                },
+                // Сэмплер для входной текстуры
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&camera_sampler),
+                },
+                // Матрица дизеринга
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &dithering_matrix_buffer,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(dithering_matrix_buffer.size()),
+                    }),
+                },
+                /*
+                // Выходные данные
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &output_data_buffer,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(output_data_buffer.size()),
+                    }),
+                },
+                */
+            ],
+        });
+
+        // Загрузка байндигов для вычислительного шейдера (будет передаваться поочередно в каждый кадр)
+        let cs_output_buffered_bindings = display_textures
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                Self::create_output_buffered_binding(
+                    &device,
+                    &cs_output_buffered_binding_layout,
+                    t,
+                    &format!("Display texture {}", i),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // Создание лайаута пайплайна вычислительного шейдера
+        let cs_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Compute shader pipeline layout"),
+            bind_group_layouts: &[&cs_const_biding_layout, &cs_output_buffered_binding_layout],
+            push_constant_ranges: &[],
+        });
+
+        // Создание пайплайна вычислительного шейдера
+        let cs_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Compute shader pipeline"),
+            layout: Some(&cs_pipeline_layout),
+            module: &cs_module,
+            entry_point: "main",
+        });
+
+        (
+            cs_pipeline,
+            output_data_buffer,
+            cs_const_binding,
+            cs_output_buffered_bindings,
+        )
+    }
+
+    fn create_render_stage(
+        device: &wgpu::Device,
+        display_textures: &[Texture],
+        out_format: wgpu::TextureFormat,
+    ) -> (
+        wgpu::RenderPipeline,
+        Buffer,
+        Buffer,
+        Vec<BindGroup>,
+        BindGroup,
+    ) {
+        // Создание буфера вершин
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: "draw surface".into(),
+            contents: bytemuck::cast_slice(crate::verticies::VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        // Создание буфера индексов
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: "Index Buffer".into(),
+            contents: bytemuck::cast_slice(crate::verticies::INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        // Создание сэмплера для выводимой текстуры
+        let display_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Display sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // Создание лэйаута группы байндингов, содержащую биндинг к выходной текстуре
+        let fs_texture_binding_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Fragment shader binding layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                }],
+            });
+
+        // Создание лэйаута группы байндингов, содержащую биндинг к сэмплеру
+        let fs_sampler_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Fragment shader sampler layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            }],
+        });
+
+        // Загрузка биндингов к выходной текстуре
+        let fs_texture_bindings = display_textures
+            .iter()
+            .enumerate()
+            .map(|(i, texture)| {
+                let name = format!("Fragment shader input binding {i}");
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(name.as_str()),
+                    layout: &fs_texture_binding_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                    }],
+                })
+            })
+            .collect::<Vec<_>>();
+
+        // Создание группы байндингов, содержащую биндинг к семплеру вы
+        let fs_sampler_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Fragment shader sampler binding"),
+            layout: &fs_sampler_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Sampler(&display_sampler),
+            }],
+        });
+
+        // Загрузка шейдеров
+        let shader_module = device.create_shader_module(wgpu::include_wgsl!("shaders/shader.wgsl"));
+
+        // Создание лэйаута графического пайплайна
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Pipeline layout"),
+                bind_group_layouts: &[&fs_texture_binding_layout, &fs_sampler_layout],
+                push_constant_ranges: &[],
+            });
+
+        // Создание графического пайплайна
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout), // наш layout
+            vertex: wgpu::VertexState {
+                // шаг 1 - вершинный шейдер
+                module: &shader_module, // единица компиляции шейдера в которой лежит вызываемая точка входа
+                entry_point: "vs_main", // название точки входа
+                buffers: &[crate::verticies::MyVertex::desc()], // дескрипторы параметоров которые мы отправим в вершинный шейдер, слоты 0, 1...
+            },
+            fragment: Some(wgpu::FragmentState {
+                // шаг 2 - фрагментный шейдер
+                module: &shader_module, // единица компиляции шейдера в которой лежит вызываемая точка входа
+                entry_point: "fs_main", // название точки входа
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: out_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip, // каждые 3 вершины образуют треугольник, с персечениями
+                strip_index_format: Some(wgpu::IndexFormat::Uint16), // тип данных для индекса вершин
+                front_face: wgpu::FrontFace::Ccw, // лицевая сторона трецгольнка - это та сторона которая образована порядком следования вершин против часовой стрелки
+                cull_mode: Some(wgpu::Face::Back),
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // Requires Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                // Requires Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: None, // отключаем тест глубины
+            multisample: wgpu::MultisampleState {
+                count: 1,                         // количество семплов для мультисемплинга
+                mask: !0,                         // маска мультисемплинга
+                alpha_to_coverage_enabled: false, // выключаем антиалиасинг
+            },
+            multiview: None, // это нужно для нендеринга во множкство мест одновременно
+        });
+
+        (
+            render_pipeline,
+            vertex_buffer,
+            index_buffer,
+            fs_texture_bindings,
+            fs_sampler_binding,
+        )
+    }
+
+    pub(crate) async fn new(
+        window: Window,
+        camera: nokhwa::Camera,
+        output_size: PhysicalSize<u32>,
+    ) -> Self {
+        let window_size = window.inner_size();
+        let camera_size = camera.resolution();
 
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
@@ -78,8 +463,8 @@ impl State {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: format,
-            width: size.width,
-            height: size.height,
+            width: window_size.width,
+            height: window_size.height,
             present_mode: wgpu::PresentMode::Immediate,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![format],
@@ -88,277 +473,65 @@ impl State {
 
         //--------------------------------------------------------------------------------
 
-        // Встроить данные картинки в бинарник, и получить на них ссылку
-        let diffuse_bytes = include_bytes!("happy-tree.png");
-        // Создаем текстуру из данных картинки
-        let diffuse_texture =
-            crate::texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png")
-                .unwrap();
-
-        let camera_texture = crate::texture::Texture::empty(
+        // Пустая ткустура для входных данных с камеры
+        let camera_texture = Texture::empty(
             &device,
-            (320, 240),
+            (camera_size.width(), camera_size.height()),
             wgpu::TextureFormat::R8Unorm,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            "Camera frame texture",
+            "Camera texture",
         );
 
-        // if feature diffuse8x8 is enabled use duffusion_matrix 8x8 elese use 4x4
-        #[cfg(not(feature = "diffuse8x8"))]
-        let dithering_matrix = [
-            0u32, 8, 2, 10, // row 0
-            12, 4, 14, 6, // row 1
-            3, 11, 1, 9, // row 2
-            15, 7, 13, 5, // row 3
-        ];
-
-        #[cfg(feature = "diffuse8x8")]
-        let dithering_matrix = [
-            0, 32, 8, 40, 2, 34, 10, 42, // row 0
-            48, 16, 56, 24, 50, 18, 58, 26, // row 1
-            12, 44, 4, 36, 14, 46, 6, 38, // row 2
-            60, 28, 52, 20, 62, 30, 54, 22, // row 3
-            3, 35, 11, 43, 1, 33, 9, 41, // row 4
-            51, 19, 59, 27, 49, 17, 57, 25, // row 5
-            15, 47, 7, 39, 13, 45, 5, 37, // row 6
-            63, 31, 55, 23, 61, 29, 53, 21, // row 7
-        ];
-
-        // create uniform from duffusion_matrix
-        let dithering_matrix_buffer =
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("duffusion_matrix buffer"),
-                contents: bytemuck::cast_slice(&dithering_matrix),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-
-        // Создаем группу биндингов для текстуры
-        let texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        // This should match the filterable field of the
-                        // corresponding Texture entry above.
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: std::num::NonZeroU32::new(1),
-                    },
-                ],
-                label: Some("texture_bind_group_layout"),
-            });
-
-        // Загружаем информацию о текстуре в группу биндингов в те же слоты что объявлены в texture_bind_group_layout
-        let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&camera_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&camera_texture.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &dithering_matrix_buffer,
-                        offset: 0,
-                        size: std::num::NonZeroU64::new(dithering_matrix_buffer.size()),
-                    }),
-                },
-            ],
-            label: Some("diffuse_bind_group"),
-        });
+        // Пустые текстуры для результата работы вычислительного шейдера (двойная буферизация)
+        let display_textures = (0..2)
+            .map(|i| {
+                Texture::empty(
+                    &device,
+                    (window_size.width, window_size.height),
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    wgpu::TextureUsages::TEXTURE_BINDING // Чтобы в шейдере можно было читать семплером
+                        | wgpu::TextureUsages::STORAGE_BINDING, // Чтобы в шейдере можно было писать напрямую
+                    &format!("Display texture {i}"),
+                )
+            })
+            .collect::<Vec<_>>();
 
         //--------------------------------------------------------------------------------
 
-        // load and complie shader from file (see shaders/shader.wgsl)
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/shader.wgsl"));
+        let compute_stage =
+            Self::create_compute_stage(&device, output_size, &camera_texture, &display_textures);
 
-        /*
-        // compule shader from file (see shaders/compute_shader.wgsl)
-        let cs_module =
-            device.create_shader_module(wgpu::include_wgsl!("shaders/compute_shader.wgsl"));
-            */
+        //--------------------------------------------------------------------------------
 
-        // create render pipeline layout
-        let render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&texture_bind_group_layout], // здесь описываются слоты для биндингов 0, 1, 2...
-                push_constant_ranges: &[],
-            });
+        let render_stage = Self::create_render_stage(&device, &display_textures, format);
 
-        // create render pipeline
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout), // наш layout
-            vertex: wgpu::VertexState {
-                // шаг 1 - вершинный шейдер
-                module: &shader, // единица компиляции шейдера в которой лежит вызываемая точка входа
-                entry_point: "vs_main", // название точки входа
-                buffers: &[crate::verticies::MyVertex::desc()], // дескрипторы параметоров которые мы отправим в вершинный шейдер, слоты 0, 1...
-            },
-            fragment: Some(wgpu::FragmentState {
-                // шаг 2 - фрагментный шейдер
-                module: &shader, // единица компиляции шейдера в которой лежит вызываемая точка входа
-                entry_point: "fs_main", // название точки входа
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip, // каждые 3 вершины образуют треугольник, с персечениями
-                strip_index_format: Some(wgpu::IndexFormat::Uint16), // тип данных для индекса вершин
-                front_face: wgpu::FrontFace::Ccw, // лицевая сторона трецгольнка - это та сторона которая образована порядком следования вершин против часовой стрелки
-                cull_mode: Some(wgpu::Face::Back),
-                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                polygon_mode: wgpu::PolygonMode::Fill,
-                // Requires Features::DEPTH_CLIP_CONTROL
-                unclipped_depth: false,
-                // Requires Features::CONSERVATIVE_RASTERIZATION
-                conservative: false,
-            },
-            depth_stencil: None, // отключаем тест глубины
-            multisample: wgpu::MultisampleState {
-                count: 1,                         // количество семплов для мультисемплинга
-                mask: !0,                         // маска мультисемплинга
-                alpha_to_coverage_enabled: false, // выключаем антиалиасинг
-            },
-            multiview: None, // это нужно для нендеринга во множкство мест одновременно
-        });
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: "draw surface".into(),
-            contents: bytemuck::cast_slice(crate::verticies::VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: "Index Buffer".into(),
-            contents: bytemuck::cast_slice(crate::verticies::INDICES),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        /*
-        // test data
-        let numbers = vec![1, 2, 3, 4];
-
-        // Gets the size in bytes of the buffer.
-        let slice_size = numbers.len() * std::mem::size_of::<u32>();
-        let test_data_size = slice_size as wgpu::BufferAddress;
-
-        // Create the buffer for input data for compute shader
-        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: test_data_size,
-            usage: wgpu::BufferUsages::MAP_READ  //allows it to be read (outside the shader).
-                | wgpu::BufferUsages::COPY_DST, // allows it to be the destination of the copy.
-            mapped_at_creation: false,
-        });
-
-        // Create the buffer for output data from compute shader
-        let storage_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Storage Buffer"),
-            contents: bytemuck::cast_slice(&numbers),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-        });
-
-        // Instantiates the compute pipeline.
-        let cs_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Compute Pipeline"),
-            layout: None,
-            module: &cs_module,
-            entry_point: "main",
-        });
-
-        // Instantiates the bind group
-        let cs_bind_group_layout = cs_pipeline.get_bind_group_layout(0);
-        let cs_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &cs_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: storage_buffer.as_entire_binding(),
-            }],
-        });
-        */
+        //--------------------------------------------------------------------------------
 
         Self {
             surface,
             device,
             queue,
             config,
-            size,
+            window_size,
             window,
-            render_pipeline,
-            vertex_buffer,
-            index_buffer,
-            diffuse_bind_group,
-            _diffuse_texture: diffuse_texture,
+            output_size,
+
             camera_texture,
-
-            /*
-            cs_pipeline,
-            cs_bind_group,
-            _staging_buffer: staging_buffer,
-            _storage_buffer: storage_buffer,
-
-            numbers,
-            */
             camera,
 
+            compule_pipeline: compute_stage.0,
+            output_buffer: compute_stage.1,
+            cs_const_input_binding_group: compute_stage.2,
+            sc_output_binding_groups: compute_stage.3,
+
+            render_pipeline: render_stage.0,
+            vertex_buffer: render_stage.1,
+            index_buffer: render_stage.2,
+            fs_texture_bindings: render_stage.3,
+            fs_sampler_binding: render_stage.4,
+
             fps_counter: fps_counter::FPSCounter::default(),
+            frame_counter: 0,
         }
     }
 
@@ -368,7 +541,7 @@ impl State {
 
     pub(crate) fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
-            self.size = new_size;
+            self.window_size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
@@ -423,6 +596,31 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
+        // Compute stage
+        {
+            // Вычислительный шейдер
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute Pass"),
+            });
+
+            // Устанавливаем созданный ранее пайплайн для вычислений
+            compute_pass.set_pipeline(&self.compule_pipeline);
+
+            // Устанавливаем в слот 0 группу привязок для входных данных
+            compute_pass.set_bind_group(0, &self.cs_const_input_binding_group, &[]);
+
+            // Устанавливаем в слот 1 группу привязок для выходной текстуры, номер зависит от четности кадра
+            compute_pass.set_bind_group(
+                1,
+                &self.sc_output_binding_groups[self.frame_counter % 2],
+                &[],
+            );
+
+            // Выполняем вычисления (для каждого пикселя выходной текстуры)
+            compute_pass.dispatch_workgroups(self.output_size.width, self.output_size.height, 1);
+        }
+
+        // Render stage
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -444,8 +642,14 @@ impl State {
 
             // Устанавливаем созданный ранее пайплайн для рендеринга
             render_pass.set_pipeline(&self.render_pipeline);
-            // Передаем группу биндов в слот 0 шейдера
-            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+            // Передаем группу привязок 0 в шейдер, зависит от нечетности кадра
+            render_pass.set_bind_group(
+                0,
+                &self.fs_texture_bindings[((self.frame_counter + 1) % 2)],
+                &[],
+            );
+            // Передаем группу привязок 1 в шейдер (семплер)
+            render_pass.set_bind_group(1, &self.fs_sampler_binding, &[]);
             // передаем буфер с вершинами в слот 0 шейдера
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             // передаем буфер с индексами в слот 1 шейдера
@@ -454,25 +658,20 @@ impl State {
             render_pass.draw_indexed(0..(crate::verticies::INDICES.len() as u32), 0, 0..1);
         }
 
-        /*
-        {
-            // Compute shader
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Compute pass"),
-            });
-            cpass.set_pipeline(&self.cs_pipeline); // Устанавливаем созданный ранее пайплайн для вычислений
-            cpass.set_bind_group(0, &self.cs_bind_group, &[]); // Передаем группу биндов в слот 0 вычислитльного шейдера
-            cpass.dispatch_workgroups(self.numbers.len() as u32, 1, 1); // Number of cells to run, the (x,y,z) size of item being processed
-
-            // https://github.com/gfx-rs/wgpu/blob/master/wgpu/examples/hello-compute/main.rs
-            // Sets adds copy operation to command encoder.
-            // Will copy data from storage buffer on GPU to staging buffer on CPU.
-            encoder.copy_buffer_to_buffer(&storage_buffer, 0, &staging_buffer, 0, size);
-        }
-        */
-
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
+
+        /*
+        // Прочитать данные из выходного буфера
+        self.output_buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, |v| {
+                println!("Read buffer result: {:?}", v)
+            });
+        */
+
+        // Переключаемся на следующий кадр
+        self.frame_counter += 1;
 
         Ok(())
     }
