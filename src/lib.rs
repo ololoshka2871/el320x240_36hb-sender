@@ -1,6 +1,8 @@
+mod compute_config;
 mod state;
 mod texture;
 mod verticies;
+mod el320x240_36hb_sender;
 
 use winit::{
     event::*,
@@ -28,16 +30,19 @@ pub async fn run() {
     // camera capture format
     let format =
         RequestedFormat::new::<nokhwa::pixel_format::LumaFormat>(RequestedFormatType::Closest(
-            CameraFormat::new(Resolution::new(320, 240), FrameFormat::YUYV, 30),
+            CameraFormat::new(Resolution::new(640, 480), FrameFormat::YUYV, 30),
         ));
 
     // open camera
     let mut camera = nokhwa::Camera::new(CameraIndex::Index(0), format).unwrap();
     camera.open_stream().unwrap();
 
+    // channel to get processed data from GPU
+    let (sender, receiver) = futures_intrusive::channel::shared::channel::<Vec<u8>>(1);
+
     // State::new uses async code, so we're going to wait for it to finish
     let mut state =
-        state::State::new(window, camera, winit::dpi::PhysicalSize::new(320, 240)).await;
+        state::State::new(window, camera, winit::dpi::PhysicalSize::new(320, 240), sender).await;
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -71,7 +76,7 @@ pub async fn run() {
             }
             Event::RedrawRequested(window_id) if window_id == state.window().id() => {
                 state.update();
-                match state.render() {
+                match pollster::block_on(state.render()) {
                     Ok(_) => {}
                     // Reconfigure the surface if it's lost or outdated
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -81,7 +86,7 @@ pub async fn run() {
                     Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
 
                     Err(wgpu::SurfaceError::Timeout) => println!("Surface timeout"),
-                }
+                };
             }
             Event::RedrawEventsCleared => {
                 // RedrawRequested will only trigger once, unless we manually

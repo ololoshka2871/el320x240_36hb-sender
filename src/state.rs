@@ -44,6 +44,7 @@ pub(crate) struct State {
     output_buffer: Buffer,
     cs_const_input_binding_group: BindGroup,
     sc_output_binding_groups: Vec<BindGroup>,
+    output_copy_buffer: Buffer,
 
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: Buffer,
@@ -53,6 +54,23 @@ pub(crate) struct State {
 
     fps_counter: fps_counter::FPSCounter,
     frame_counter: usize,
+
+    map_msg_rx: futures_intrusive::channel::shared::GenericReceiver<
+        parking_lot::RawMutex,
+        Result<(), wgpu::BufferAsyncError>,
+        futures_intrusive::buffer::GrowingHeapBuf<Result<(), wgpu::BufferAsyncError>>,
+    >,
+    map_msg_tx: futures_intrusive::channel::shared::GenericSender<
+        parking_lot::RawMutex,
+        Result<(), wgpu::BufferAsyncError>,
+        futures_intrusive::buffer::GrowingHeapBuf<Result<(), wgpu::BufferAsyncError>>,
+    >,
+
+    output_q_sender: futures_intrusive::channel::shared::GenericSender<
+        parking_lot::RawMutex,
+        Vec<u8>,
+        futures_intrusive::buffer::GrowingHeapBuf<Vec<u8>>,
+    >,
 }
 
 impl State {
@@ -89,17 +107,40 @@ impl State {
         output_size: winit::dpi::PhysicalSize<u32>,
         camera_texture: &Texture,
         display_textures: &[Texture],
-    ) -> (wgpu::ComputePipeline, Buffer, BindGroup, Vec<BindGroup>) {
+    ) -> (
+        wgpu::ComputePipeline,
+        Buffer,
+        BindGroup,
+        Vec<BindGroup>,
+        Buffer,
+    ) {
         // Буффер для матрицы дизеринга
         let dithering_matrix_buffer =
             Self::create_buffer(&device, &DITHERING_MATRIX, "Output data");
 
         // Пустой буффер для входных данных
         let output_data_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Ouitput data"),
-            size: (output_size.height * output_size.width * 8) as u64,
+            label: Some("Output data"),
+            size: (output_size.height * output_size.width / 8) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: true,
+            mapped_at_creation: false, // этт буфер вообще не мапить!
+        });
+
+        // Пустой промежуточный буффер для выходных данных
+        let output_copy_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Output data copy"),
+            size: output_data_buffer.size(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: true, // этот буфер мапить!
+        });
+
+        // Буфер содержащий конфигурацию
+        let config_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: "config buffer".into(),
+            contents: bytemuck::cast_slice(&[crate::compute_config::ComputeConfig {
+                width: output_size.width,
+            }]),
+            usage: wgpu::BufferUsages::STORAGE,
         });
 
         // Создание сэмплера для камеры
@@ -152,7 +193,6 @@ impl State {
                         },
                         count: None,
                     },
-                    /*
                     // Выходные данные
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
@@ -164,7 +204,17 @@ impl State {
                         },
                         count: None,
                     },
-                    */
+                    // Конфигурация
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -211,7 +261,6 @@ impl State {
                         size: std::num::NonZeroU64::new(dithering_matrix_buffer.size()),
                     }),
                 },
-                /*
                 // Выходные данные
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -221,7 +270,15 @@ impl State {
                         size: std::num::NonZeroU64::new(output_data_buffer.size()),
                     }),
                 },
-                */
+                // Конфигурация
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &config_buffer,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(config_buffer.size()),
+                    }),
+                },
             ],
         });
 
@@ -259,6 +316,7 @@ impl State {
             output_data_buffer,
             cs_const_binding,
             cs_output_buffered_bindings,
+            output_copy_buffer,
         )
     }
 
@@ -418,6 +476,11 @@ impl State {
         window: Window,
         camera: nokhwa::Camera,
         output_size: PhysicalSize<u32>,
+        output_q_sender: futures_intrusive::channel::shared::GenericSender<
+            parking_lot::RawMutex,
+            Vec<u8>,
+            futures_intrusive::buffer::GrowingHeapBuf<Vec<u8>>,
+        >,
     ) -> Self {
         let window_size = window.inner_size();
         let camera_size = camera.resolution();
@@ -473,7 +536,7 @@ impl State {
 
         //--------------------------------------------------------------------------------
 
-        // Пустая ткустура для входных данных с камеры
+        // Пустая текстура для входных данных с камеры
         let camera_texture = Texture::empty(
             &device,
             (camera_size.width(), camera_size.height()),
@@ -487,7 +550,7 @@ impl State {
             .map(|i| {
                 Texture::empty(
                     &device,
-                    (window_size.width, window_size.height),
+                    (output_size.width, output_size.height),
                     wgpu::TextureFormat::Rgba8Unorm,
                     wgpu::TextureUsages::TEXTURE_BINDING // Чтобы в шейдере можно было читать семплером
                         | wgpu::TextureUsages::STORAGE_BINDING, // Чтобы в шейдере можно было писать напрямую
@@ -507,6 +570,8 @@ impl State {
 
         //--------------------------------------------------------------------------------
 
+        let (sender, receiver) = futures_intrusive::channel::shared::channel(1);
+
         Self {
             surface,
             device,
@@ -523,6 +588,7 @@ impl State {
             output_buffer: compute_stage.1,
             cs_const_input_binding_group: compute_stage.2,
             sc_output_binding_groups: compute_stage.3,
+            output_copy_buffer: compute_stage.4,
 
             render_pipeline: render_stage.0,
             vertex_buffer: render_stage.1,
@@ -532,6 +598,11 @@ impl State {
 
             fps_counter: fps_counter::FPSCounter::default(),
             frame_counter: 0,
+
+            map_msg_rx: receiver,
+            map_msg_tx: sender,
+
+            output_q_sender,
         }
     }
 
@@ -558,7 +629,7 @@ impl State {
         println!("FPS: {}", fps);
     }
 
-    pub(crate) fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    pub(crate) async fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         if let Ok(frame) = self.camera.frame() {
             // frame - YUV frame
             let frame = frame.decode_image::<pixel_format::LumaFormat>().unwrap();
@@ -617,7 +688,12 @@ impl State {
             );
 
             // Выполняем вычисления (для каждого пикселя выходной текстуры)
-            compute_pass.dispatch_workgroups(self.output_size.width, self.output_size.height, 1);
+            compute_pass.dispatch_workgroups(
+                (self.output_size.width * self.output_size.height)
+                    / (core::mem::size_of::<u32>() * 8) as u32,
+                1,
+                1,
+            );
         }
 
         // Render stage
@@ -658,20 +734,56 @@ impl State {
             render_pass.draw_indexed(0..(crate::verticies::INDICES.len() as u32), 0, 0..1);
         }
 
+        // data stage
+
+        // Нарпямую читать из STORAGE буфера нельзя, нужно скопировать результат в отдельный буфер который поддерживает mapping
+        encoder.copy_buffer_to_buffer(
+            &self.output_buffer,
+            0,
+            &self.output_copy_buffer,
+            0,
+            self.output_buffer.size(),
+        );
+        {
+            match self.map_msg_rx.try_receive() {
+                Ok(Ok(())) => {
+                    // Прочитать данные из выходного буфера
+                    let out_buf_view = self.output_copy_buffer.slice(..).get_mapped_range();
+
+                    // Преобразовать данные в вектор байтов
+                    let out_buf = unsafe {
+                        std::slice::from_raw_parts(
+                            out_buf_view.as_ptr() as *const u8,
+                            out_buf_view.len(),
+                        )
+                    }
+                    .to_vec();
+                }
+                Ok(Err(e)) => panic!("Failed to map buffer: {}", e.to_string()),
+                Err(_) => { /* no data */ }
+            }
+        }
+        // unmap buffer
+        self.output_copy_buffer.unmap();
+
+        //---------------------------------------------------------------------
+
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
 
-        /*
-        // Прочитать данные из выходного буфера
-        self.output_buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, |v| {
-                println!("Read buffer result: {:?}", v)
-            });
-        */
+        //---------------------------------------------------------------------
+
+        {
+            let tx = self.map_msg_tx.clone();
+            self.output_copy_buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |r| {
+                    let _ = tx.send(r);
+                });
+        }
 
         // Переключаемся на следующий кадр
-        self.frame_counter += 1;
+        self.frame_counter = self.frame_counter.wrapping_add(1);
 
         Ok(())
     }
