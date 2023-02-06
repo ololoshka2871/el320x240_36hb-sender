@@ -37,9 +37,9 @@ fn dither(position: vec2<f32>, color: f32) -> f32 {
 }
 
 @compute
-@workgroup_size(3, 3)
+@workgroup_size(16, 16) // размер рабочей группы, так как он двумерный, и в global_id будут двумерные координаты
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    var point_coords = vec2<u32>(global_id.x, global_id.y);
+    var point_coords = vec2<u32>(global_id.x, global_id.y); // координаты пикселя который будем обрабатывать
     var tex_coords = vec2<f32>(point_coords) / vec2<f32>(textureDimensions(output_texture));
     var gray = textureSampleLevel(cam_data, s_cam, tex_coords, 0.0); // textureSamp() не разрешено в compute шейдерах
     var res = dither(vec2<f32>(point_coords), gray.r);
