@@ -1,8 +1,8 @@
 mod compute_config;
+mod el320x240_36hb_sender;
 mod state;
 mod texture;
 mod verticies;
-mod el320x240_36hb_sender;
 
 use winit::{
     event::*,
@@ -40,9 +40,19 @@ pub async fn run() {
     // channel to get processed data from GPU
     let (sender, receiver) = futures_intrusive::channel::shared::channel::<Vec<u8>>(1);
 
+    // start sender thread
+    std::thread::spawn(move || {
+        el320x240_36hb_sender::display_sender("/dev/ttyACM1".to_string(), receiver);
+    });
+
     // State::new uses async code, so we're going to wait for it to finish
-    let mut state =
-        state::State::new(window, camera, winit::dpi::PhysicalSize::new(320, 240), sender).await;
+    let mut state = state::State::new(
+        window,
+        camera,
+        winit::dpi::PhysicalSize::new(320, 240),
+        sender,
+    )
+    .await;
 
     event_loop.run(move |event, _, control_flow| {
         match event {

@@ -66,10 +66,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // write to output pixel if white
         if res == 1.0 {
-            output_u32 |= 1u << i;
+            output_u32 |= (1u << (7u - (i % 8u))) << ((i / 8u) * 8u);
         }
     }
 
     // write to output pixel chank
-    //output_data[global_id.x] = output_u32;
+    output_data[global_id.x] = output_u32;
 }

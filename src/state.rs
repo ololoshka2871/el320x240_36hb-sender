@@ -55,17 +55,6 @@ pub(crate) struct State {
     fps_counter: fps_counter::FPSCounter,
     frame_counter: usize,
 
-    map_msg_rx: futures_intrusive::channel::shared::GenericReceiver<
-        parking_lot::RawMutex,
-        Result<(), wgpu::BufferAsyncError>,
-        futures_intrusive::buffer::GrowingHeapBuf<Result<(), wgpu::BufferAsyncError>>,
-    >,
-    map_msg_tx: futures_intrusive::channel::shared::GenericSender<
-        parking_lot::RawMutex,
-        Result<(), wgpu::BufferAsyncError>,
-        futures_intrusive::buffer::GrowingHeapBuf<Result<(), wgpu::BufferAsyncError>>,
-    >,
-
     output_q_sender: futures_intrusive::channel::shared::GenericSender<
         parking_lot::RawMutex,
         Vec<u8>,
@@ -123,7 +112,7 @@ impl State {
             label: Some("Output data"),
             size: (output_size.height * output_size.width / 8) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false, // этт буфер вообще не мапить!
+            mapped_at_creation: false, // этот буфер вообще не мапить!
         });
 
         // Пустой промежуточный буффер для выходных данных
@@ -131,7 +120,7 @@ impl State {
             label: Some("Output data copy"),
             size: output_data_buffer.size(),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: true, // этот буфер мапить!
+            mapped_at_creation: false, // этот мапить по запросу
         });
 
         // Буфер содержащий конфигурацию
@@ -570,8 +559,6 @@ impl State {
 
         //--------------------------------------------------------------------------------
 
-        let (sender, receiver) = futures_intrusive::channel::shared::channel(1);
-
         Self {
             surface,
             device,
@@ -598,9 +585,6 @@ impl State {
 
             fps_counter: fps_counter::FPSCounter::default(),
             frame_counter: 0,
-
-            map_msg_rx: receiver,
-            map_msg_tx: sender,
 
             output_q_sender,
         }
@@ -734,7 +718,7 @@ impl State {
             render_pass.draw_indexed(0..(crate::verticies::INDICES.len() as u32), 0, 0..1);
         }
 
-        // data stage
+        //---------------------------------------------------------------------
 
         // Нарпямую читать из STORAGE буфера нельзя, нужно скопировать результат в отдельный буфер который поддерживает mapping
         encoder.copy_buffer_to_buffer(
@@ -744,43 +728,36 @@ impl State {
             0,
             self.output_buffer.size(),
         );
-        {
-            match self.map_msg_rx.try_receive() {
-                Ok(Ok(())) => {
-                    // Прочитать данные из выходного буфера
-                    let out_buf_view = self.output_copy_buffer.slice(..).get_mapped_range();
-
-                    // Преобразовать данные в вектор байтов
-                    let out_buf = unsafe {
-                        std::slice::from_raw_parts(
-                            out_buf_view.as_ptr() as *const u8,
-                            out_buf_view.len(),
-                        )
-                    }
-                    .to_vec();
-                }
-                Ok(Err(e)) => panic!("Failed to map buffer: {}", e.to_string()),
-                Err(_) => { /* no data */ }
-            }
-        }
-        // unmap buffer
-        self.output_copy_buffer.unmap();
-
-        //---------------------------------------------------------------------
 
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
 
         //---------------------------------------------------------------------
 
+        // data stage
         {
-            let tx = self.map_msg_tx.clone();
             self.output_copy_buffer
                 .slice(..)
-                .map_async(wgpu::MapMode::Read, move |r| {
-                    let _ = tx.send(r);
-                });
+                .map_async(wgpu::MapMode::Read, move |_| {});
+
+            // Poll the device in a blocking manner so that our future resolves.
+            // In an actual application, `device.poll(...)` should
+            // be called in an event loop or on another thread.
+            self.device.poll(wgpu::Maintain::Wait);
+
+            // Прочитать данные из выходного буфера
+            let out_buf_view = self.output_copy_buffer.slice(..).get_mapped_range();
+
+            // Преобразовать данные в вектор байтов
+            let out_buf = unsafe {
+                std::slice::from_raw_parts(out_buf_view.as_ptr() as *const u8, out_buf_view.len())
+            }
+            .to_vec();
+
+            let _ = self.output_q_sender.try_send(out_buf);
         }
+        // unmap buffer
+        self.output_copy_buffer.unmap();
 
         // Переключаемся на следующий кадр
         self.frame_counter = self.frame_counter.wrapping_add(1);
