@@ -44,7 +44,7 @@ pub async fn run(args: args::Cli) {
     );
 
     // open camera
-    let mut camera = nokhwa::Camera::new(CameraIndex::Index(0), format).unwrap();
+    let mut camera = nokhwa::Camera::new(CameraIndex::Index(args.id), format).unwrap();
     camera.open_stream().unwrap();
 
     // channel to get processed data from GPU
@@ -60,7 +60,7 @@ pub async fn run(args: args::Cli) {
     let mut state = state::State::new(
         window,
         camera,
-        winit::dpi::PhysicalSize::new(args::DISPLAY_HEIGHT, args::DISPLAY_WIDTH),
+        winit::dpi::PhysicalSize::new(args::DISPLAY_WIDTH, args::DISPLAY_HEIGHT),
         sender,
         args.filter_algorithm,
         (args.black_lvl, args.white_lvl),
