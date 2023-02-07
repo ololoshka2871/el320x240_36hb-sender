@@ -1,9 +1,8 @@
-// Ordered defuse dithering
+// Pinwheel filer: https://escholarship.org/content/qt7b78v752/qt7b78v752_noSplash_b7b84686bf8195e832c0afa9e46c633e.pdf
 
 struct ComputeConfig {
     @location(0) width: u32,
-    @location(1) black_lvl: f32,
-    @location(2) white_lvl: f32,
+    @location(1) threshold: f32,
 };
 
 // Текстура видео с камеры
@@ -29,25 +28,19 @@ struct ComputeConfig {
 
 //------------------------------------------------------------
 
-fn indexValue(position: vec2<f32>, matrix_size: f32, matrix_dim: u32) -> f32 {
-    var x = u32(position.x) % matrix_dim;
-    var y = u32(position.y) % matrix_dim;
-
-    return f32(dithering_matrix[x + y * matrix_dim]) / matrix_size;
-}
-
-fn dither(position: vec2<f32>, color: f32, matrix_size: f32, matrix_dim: u32) -> f32 {
-    var closestColor: f32;
-    if color < 0.5 { closestColor = 0.0; } else { closestColor = 1.0; };
-    var secondClosestColor = 1.0 - closestColor;
-    var d = indexValue(position, matrix_size, matrix_dim);
-    var distance = abs(closestColor - color);
-    if distance < d { return closestColor; } else { return secondClosestColor; };
-}
-
 @compute
 @workgroup_size(1) // В шейдер будем передавать координаты в плоском виде, поэтому размер группы 1
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let step_types: array<u32, 16> = array<u32, 16>(
+        0u,
+        1u,
+        2u, 2u,
+        3u, 3u,
+        0u, 0u, 0u,
+        1u, 1u, 1u,
+        2u, 2u, 2u, 2u,
+    );
+
     let start_pixel = global_id.x * 32u; // 32 пикселя обрабатывается за 1 вызов шейдера
     let output_tex_dim = vec2<f32>(textureDimensions(output_texture));
 
@@ -63,15 +56,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let tex_coords = vec2<f32>(point_coords) / output_tex_dim;
         let gray = textureSampleLevel(cam_data, s_cam, tex_coords, 0.0); // textureSamp() не разрешено в compute шейдерах
-        let res = dither(vec2<f32>(point_coords), gray.r, matrix_size, matrix_dim);
+
+        var res: f32;
+        if gray.r < config.threshold {
+            res = 0.0;
+        } else {
+            res = 1.0;
+
+            // write to output pixel if white
+            output_u32 |= (1u << (7u - (i % 8u))) << ((i / 8u) * 8u);
+        };
 
         // write to output texture 
         textureStore(output_texture, vec2<i32>(i32(point_coords.x), i32(point_coords.y)), vec4<f32>(res, 0.0, 0.0, 1.0));
-
-        // write to output pixel if white
-        if res == 1.0 {
-            output_u32 |= (1u << (7u - (i % 8u))) << ((i / 8u) * 8u);
-        }
     }
 
     // write to output pixel chank

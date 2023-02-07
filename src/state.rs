@@ -7,27 +7,6 @@ use winit::{dpi::PhysicalSize, event::*, window::Window};
 
 use crate::texture::Texture;
 
-// if feature diffuse8x8 is enabled use duffusion_matrix 8x8 elese use 4x4
-#[cfg(not(feature = "diffuse8x8"))]
-const DITHERING_MATRIX: [u32; 16] = [
-    0u32, 8, 2, 10, // row 0
-    12, 4, 14, 6, // row 1
-    3, 11, 1, 9, // row 2
-    15, 7, 13, 5, // row 3
-];
-
-#[cfg(feature = "diffuse8x8")]
-const DITHERING_MATRIX: [u32; 64] = [
-    0, 32, 8, 40, 2, 34, 10, 42, // row 0
-    48, 16, 56, 24, 50, 18, 58, 26, // row 1
-    12, 44, 4, 36, 14, 46, 6, 38, // row 2
-    60, 28, 52, 20, 62, 30, 54, 22, // row 3
-    3, 35, 11, 43, 1, 33, 9, 41, // row 4
-    51, 19, 59, 27, 49, 17, 57, 25, // row 5
-    15, 47, 7, 39, 13, 45, 5, 37, // row 6
-    63, 31, 55, 23, 61, 29, 53, 21, // row 7
-];
-
 pub(crate) struct State {
     surface: wgpu::Surface,
     device: wgpu::Device,
@@ -35,7 +14,6 @@ pub(crate) struct State {
     config: wgpu::SurfaceConfiguration,
     pub(crate) window_size: winit::dpi::PhysicalSize<u32>,
     window: Window,
-    output_size: PhysicalSize<u32>,
 
     camera_texture: crate::texture::Texture,
     camera: nokhwa::Camera,
@@ -45,6 +23,7 @@ pub(crate) struct State {
     cs_const_input_binding_group: BindGroup,
     sc_output_binding_groups: Vec<BindGroup>,
     output_copy_buffer: Buffer,
+    compute_stage: Box<dyn crate::compute_stage_control::ComputeStageControl>,
 
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: Buffer,
@@ -63,6 +42,7 @@ pub(crate) struct State {
 }
 
 impl State {
+    /*
     fn load_cs_shader(
         device: &wgpu::Device,
         algo: crate::args::DitherAlgorithm,
@@ -72,257 +52,11 @@ impl State {
                 .create_shader_module(wgpu::include_wgsl!("shaders/compute_shader_threshold.wgsl")),
             crate::args::DitherAlgorithm::Ordered => device
                 .create_shader_module(wgpu::include_wgsl!("shaders/compute_shader_ordered.wgsl")),
+            crate::args::DitherAlgorithm::Pinwheel => device
+                .create_shader_module(wgpu::include_wgsl!("shaders/compute_shader_pinwheel.wgsl")),
         }
     }
-
-    fn create_buffer<T: Sized + bytemuck::Pod>(
-        device: &wgpu::Device,
-        data: &[T],
-        name: &str,
-    ) -> Buffer {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(name),
-            contents: bytemuck::cast_slice(data),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        })
-    }
-
-    fn create_output_buffered_binding(
-        device: &wgpu::Device,
-        binding_group_layout: &wgpu::BindGroupLayout,
-        texture: &Texture,
-        name: &str,
-    ) -> BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(name),
-            layout: binding_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&texture.view),
-            }],
-        })
-    }
-
-    fn create_compute_stage(
-        device: &wgpu::Device,
-        output_size: winit::dpi::PhysicalSize<u32>,
-        camera_texture: &Texture,
-        display_textures: &[Texture],
-        algo: crate::args::DitherAlgorithm,
-        lvls: (f32, f32),
-    ) -> (
-        wgpu::ComputePipeline,
-        Buffer,
-        BindGroup,
-        Vec<BindGroup>,
-        Buffer,
-    ) {
-        // Буффер для матрицы дизеринга
-        let dithering_matrix_buffer =
-            Self::create_buffer(&device, &DITHERING_MATRIX, "Output data");
-
-        // Пустой буффер для входных данных
-        let output_data_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Output data"),
-            size: (output_size.height * output_size.width / 8) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false, // этот буфер вообще не мапить!
-        });
-
-        // Пустой промежуточный буффер для выходных данных
-        let output_copy_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Output data copy"),
-            size: output_data_buffer.size(),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false, // этот мапить по запросу
-        });
-
-        // Буфер содержащий конфигурацию
-        let config_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: "config buffer".into(),
-            contents: bytemuck::cast_slice(&[crate::compute_config::ComputeConfig {
-                width: output_size.width,
-                black_lvl: lvls.0,
-                white_lvl: lvls.1,
-            }]),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        // Создание сэмплера для камеры
-        let camera_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Camera sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-
-        // Загрузка вычислительного шейдера
-        let cs_module = Self::load_cs_shader(&device, algo);
-
-        // Создание группы привязки постоянных данных для вычислительного шейдера
-        let cs_const_biding_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Compute shader const binding layout"),
-                entries: &[
-                    // Входные данные c камеры
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    // Сэмплер для входной текстуры
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    // Матрица дизеринга
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Выходные данные
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Конфигурация
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-
-        // Создание группы привязки выходных данных для вычислительного шейдера (тут будет меняться текстура из display_textures)
-        let cs_output_buffered_binding_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Compute shader output binding layout"),
-                entries: &[
-                    // Выходная текстура после дизеринга
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: wgpu::TextureFormat::Rgba8Unorm,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-
-        // Загрузка байндигов для вычислительного шейдера
-        let cs_const_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Compute shader const binding"),
-            layout: &cs_const_biding_layout,
-            entries: &[
-                // Входные данные c камеры
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&camera_texture.view),
-                },
-                // Сэмплер для входной текстуры
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&camera_sampler),
-                },
-                // Матрица дизеринга
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &dithering_matrix_buffer,
-                        offset: 0,
-                        size: std::num::NonZeroU64::new(dithering_matrix_buffer.size()),
-                    }),
-                },
-                // Выходные данные
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &output_data_buffer,
-                        offset: 0,
-                        size: std::num::NonZeroU64::new(output_data_buffer.size()),
-                    }),
-                },
-                // Конфигурация
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &config_buffer,
-                        offset: 0,
-                        size: std::num::NonZeroU64::new(config_buffer.size()),
-                    }),
-                },
-            ],
-        });
-
-        // Загрузка байндигов для вычислительного шейдера (будет передаваться поочередно в каждый кадр)
-        let cs_output_buffered_bindings = display_textures
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                Self::create_output_buffered_binding(
-                    &device,
-                    &cs_output_buffered_binding_layout,
-                    t,
-                    &format!("Display texture {}", i),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        // Создание лайаута пайплайна вычислительного шейдера
-        let cs_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Compute shader pipeline layout"),
-            bind_group_layouts: &[&cs_const_biding_layout, &cs_output_buffered_binding_layout],
-            push_constant_ranges: &[],
-        });
-
-        // Создание пайплайна вычислительного шейдера
-        let cs_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Compute shader pipeline"),
-            layout: Some(&cs_pipeline_layout),
-            module: &cs_module,
-            entry_point: "main",
-        });
-
-        (
-            cs_pipeline,
-            output_data_buffer,
-            cs_const_binding,
-            cs_output_buffered_bindings,
-            output_copy_buffer,
-        )
-    }
+    */
 
     fn create_render_stage(
         device: &wgpu::Device,
@@ -568,14 +302,15 @@ impl State {
 
         //--------------------------------------------------------------------------------
 
-        let compute_stage = Self::create_compute_stage(
-            &device,
-            output_size,
-            &camera_texture,
-            &display_textures,
-            algo,
-            lvls,
-        );
+        let compute_stage = crate::compute_stage_control::create_compute_stage(algo, output_size);
+
+        let (
+            compule_pipeline,
+            output_buffer,
+            cs_const_input_binding_group,
+            sc_output_binding_groups,
+            output_copy_buffer,
+        ) = compute_stage.configure(&device, &camera_texture, &display_textures, lvls);
 
         //--------------------------------------------------------------------------------
 
@@ -590,16 +325,16 @@ impl State {
             config,
             window_size,
             window,
-            output_size,
 
             camera_texture,
             camera,
 
-            compule_pipeline: compute_stage.0,
-            output_buffer: compute_stage.1,
-            cs_const_input_binding_group: compute_stage.2,
-            sc_output_binding_groups: compute_stage.3,
-            output_copy_buffer: compute_stage.4,
+            compule_pipeline,
+            output_buffer,
+            cs_const_input_binding_group,
+            sc_output_binding_groups,
+            output_copy_buffer,
+            compute_stage,
 
             render_pipeline: render_stage.0,
             vertex_buffer: render_stage.1,
@@ -695,13 +430,8 @@ impl State {
                 &[],
             );
 
-            // Выполняем вычисления (для каждого пикселя выходной текстуры)
-            compute_pass.dispatch_workgroups(
-                (self.output_size.width * self.output_size.height)
-                    / (core::mem::size_of::<u32>() * 8) as u32,
-                1,
-                1,
-            );
+            // Выполняем вычисления
+            self.compute_stage.call_dispatch(&mut compute_pass);
         }
 
         // Render stage

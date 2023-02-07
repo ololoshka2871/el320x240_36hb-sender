@@ -9,6 +9,7 @@ pub const DISPLAY_FPS: u32 = 30;
 pub enum DitherAlgorithm {
     Threshold,
     Ordered,
+    Pinwheel,
 }
 
 #[allow(unused)]
@@ -61,7 +62,8 @@ impl std::str::FromStr for DitherAlgorithm {
         match s {
             "Threshold" => Ok(DitherAlgorithm::Threshold),
             "Ordered" => Ok(DitherAlgorithm::Ordered),
-            _ => Err(format!("Unknown dithering algorithm: {}, mast be one of {}", s, "Threshold, Ordered")),
+            "Pinwheel" => Ok(DitherAlgorithm::Pinwheel),
+            _ => Err(format!("Unknown dithering algorithm: {}, mast be one of {}", s, "Threshold, Ordered or Pinwheel")),
         }
     }
 }

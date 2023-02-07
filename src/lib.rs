@@ -1,6 +1,6 @@
 pub mod args;
 
-mod compute_config;
+mod compute_stage_control;
 mod el320x240_36hb_sender;
 mod state;
 mod texture;

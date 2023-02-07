@@ -1,9 +1,8 @@
-// No dithering, just black and white via average gray level betwen black_lvl and white_lvl
+// Ordered defuse dithering
 
 struct ComputeConfig {
     @location(0) width: u32,
-    @location(1) black_lvl: f32,
-    @location(2) white_lvl: f32,
+    @location(1) threshold: f32,
 };
 
 // Текстура видео с камеры
@@ -38,11 +37,19 @@ fn indexValue(position: vec2<f32>, matrix_size: f32, matrix_dim: u32) -> f32 {
 
 fn dither(position: vec2<f32>, color: f32, matrix_size: f32, matrix_dim: u32) -> f32 {
     var closestColor: f32;
-    if color < 0.5 { closestColor = 0.0; } else { closestColor = 1.0; };
+    if color < config.threshold {
+        closestColor = 0.0; 
+    } else { 
+        closestColor = 1.0; 
+    };
     var secondClosestColor = 1.0 - closestColor;
     var d = indexValue(position, matrix_size, matrix_dim);
     var distance = abs(closestColor - color);
-    if distance < d { return closestColor; } else { return secondClosestColor; };
+    if distance < d { 
+        return closestColor; 
+    } else { 
+        return secondClosestColor; 
+    };
 }
 
 @compute
@@ -63,19 +70,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let tex_coords = vec2<f32>(point_coords) / output_tex_dim;
         let gray = textureSampleLevel(cam_data, s_cam, tex_coords, 0.0); // textureSamp() не разрешено в compute шейдерах
-
-        var res: f32;
-        if gray.r < (config.white_lvl + config.black_lvl) / 2.0 {
-            res = 0.0;
-        } else { 
-            res = 1.0;
-
-            // write to output pixel if white
-            output_u32 |= (1u << (7u - (i % 8u))) << ((i / 8u) * 8u);
-        };
+        let res = dither(vec2<f32>(point_coords), gray.r, matrix_size, matrix_dim);
 
         // write to output texture 
         textureStore(output_texture, vec2<i32>(i32(point_coords.x), i32(point_coords.y)), vec4<f32>(res, 0.0, 0.0, 1.0));
+
+        // write to output pixel if white
+        if res == 1.0 {
+            output_u32 |= (1u << (7u - (i % 8u))) << ((i / 8u) * 8u);
+        }
     }
 
     // write to output pixel chank
