@@ -7,7 +7,7 @@ pub const DISPLAY_FPS: u32 = 30;
 
 #[derive(Debug)]
 pub enum DitherAlgorithm {
-    None,
+    Threshold,
     Ordered,
 }
 
@@ -37,9 +37,9 @@ pub struct Cli {
     #[structopt(short, default_value = "/dev/ttyACM0")]
     pub port: String,
 
-    /// use dithering algorithm
-    #[structopt(short, default_value = "None")]
-    pub dither: DitherAlgorithm,
+    /// use filter algorithm
+    #[structopt(short, default_value = "Threshold")]
+    pub filter_algorithm: DitherAlgorithm,
 
     /// level of black color, 0.0-1.0
     #[structopt(long, default_value = "0.0", parse(try_from_str = parse_h_val))]
@@ -59,9 +59,9 @@ impl std::str::FromStr for DitherAlgorithm {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "None" => Ok(DitherAlgorithm::None),
+            "Threshold" => Ok(DitherAlgorithm::Threshold),
             "Ordered" => Ok(DitherAlgorithm::Ordered),
-            _ => Err(format!("Unknown dithering algorithm: {}", s)),
+            _ => Err(format!("Unknown dithering algorithm: {}, mast be one of {}", s, "Threshold, Ordered")),
         }
     }
 }

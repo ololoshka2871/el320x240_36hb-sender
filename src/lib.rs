@@ -62,6 +62,7 @@ pub async fn run(args: args::Cli) {
         camera,
         winit::dpi::PhysicalSize::new(args::DISPLAY_HEIGHT, args::DISPLAY_WIDTH),
         sender,
+        args.filter_algorithm,
         (args.black_lvl, args.white_lvl),
     )
     .await;

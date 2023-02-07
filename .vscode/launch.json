@@ -9,7 +9,7 @@
             "type": "lldb",
             "request": "launch",
             "program": "target/debug/el320x240_36hb-sender",
-            "args": ["-p", "/dev/ttyACM1"],
+            "args": ["-p", "/dev/ttyACM1", "--width", "640", "--heigth", "480", "-f", "Ordered"],
             "cwd": "${workspaceFolder}",
         },
         {

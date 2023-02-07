@@ -63,6 +63,18 @@ pub(crate) struct State {
 }
 
 impl State {
+    fn load_cs_shader(
+        device: &wgpu::Device,
+        algo: crate::args::DitherAlgorithm,
+    ) -> wgpu::ShaderModule {
+        match algo {
+            crate::args::DitherAlgorithm::Threshold => device
+                .create_shader_module(wgpu::include_wgsl!("shaders/compute_shader_threshold.wgsl")),
+            crate::args::DitherAlgorithm::Ordered => device
+                .create_shader_module(wgpu::include_wgsl!("shaders/compute_shader_ordered.wgsl")),
+        }
+    }
+
     fn create_buffer<T: Sized + bytemuck::Pod>(
         device: &wgpu::Device,
         data: &[T],
@@ -96,6 +108,7 @@ impl State {
         output_size: winit::dpi::PhysicalSize<u32>,
         camera_texture: &Texture,
         display_textures: &[Texture],
+        algo: crate::args::DitherAlgorithm,
         lvls: (f32, f32),
     ) -> (
         wgpu::ComputePipeline,
@@ -148,8 +161,7 @@ impl State {
         });
 
         // Загрузка вычислительного шейдера
-        let cs_module =
-            device.create_shader_module(wgpu::include_wgsl!("shaders/compute_shader.wgsl"));
+        let cs_module = Self::load_cs_shader(&device, algo);
 
         // Создание группы привязки постоянных данных для вычислительного шейдера
         let cs_const_biding_layout =
@@ -404,7 +416,8 @@ impl State {
         });
 
         // Загрузка шейдеров
-        let shader_module = device.create_shader_module(wgpu::include_wgsl!("shaders/shader.wgsl"));
+        let shader_module =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/graphic_shader.wgsl"));
 
         // Создание лэйаута графического пайплайна
         let render_pipeline_layout =
@@ -473,6 +486,7 @@ impl State {
             Vec<u8>,
             futures_intrusive::buffer::GrowingHeapBuf<Vec<u8>>,
         >,
+        algo: crate::args::DitherAlgorithm,
         lvls: (f32, f32),
     ) -> Self {
         let window_size = window.inner_size();
@@ -559,6 +573,7 @@ impl State {
             output_size,
             &camera_texture,
             &display_textures,
+            algo,
             lvls,
         );
 
