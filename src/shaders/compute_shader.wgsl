@@ -1,5 +1,7 @@
 struct ComputeConfig {
     @location(0) width: u32,
+    @location(1) black_lvl: f32,
+    @location(2) white_lvl: f32,
 };
 
 // Текстура видео с камеры

@@ -1,3 +1,5 @@
+pub mod args;
+
 mod compute_config;
 mod el320x240_36hb_sender;
 mod state;
@@ -12,14 +14,19 @@ use winit::{
 
 use nokhwa::utils::*;
 
-pub async fn run() {
+pub async fn run(args: args::Cli) {
     env_logger::init();
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
 
     // We need to initialize Nokhwa before we can use it
-    nokhwa::nokhwa_initialize(|_| {});
+    nokhwa::nokhwa_initialize(|r| {
+        println!("Nokhwa initialized! ({r})");
+        if !r {
+            std::process::exit(1);
+        }
+    });
 
     let cameras = nokhwa::query(nokhwa::utils::ApiBackend::Auto).unwrap();
     if cameras.is_empty() {
@@ -28,10 +35,13 @@ pub async fn run() {
     }
 
     // camera capture format
-    let format =
-        RequestedFormat::new::<nokhwa::pixel_format::LumaFormat>(RequestedFormatType::Closest(
-            CameraFormat::new(Resolution::new(640, 480), FrameFormat::YUYV, 30),
-        ));
+    let format = RequestedFormat::new::<nokhwa::pixel_format::LumaFormat>(
+        RequestedFormatType::Closest(CameraFormat::new(
+            Resolution::new(args.width, args.heigth),
+            FrameFormat::YUYV,
+            args.fps,
+        )),
+    );
 
     // open camera
     let mut camera = nokhwa::Camera::new(CameraIndex::Index(0), format).unwrap();
@@ -41,16 +51,18 @@ pub async fn run() {
     let (sender, receiver) = futures_intrusive::channel::shared::channel::<Vec<u8>>(1);
 
     // start sender thread
+    let port = args.port;
     std::thread::spawn(move || {
-        el320x240_36hb_sender::display_sender("/dev/ttyACM1".to_string(), receiver);
+        el320x240_36hb_sender::display_sender(port, receiver);
     });
 
     // State::new uses async code, so we're going to wait for it to finish
     let mut state = state::State::new(
         window,
         camera,
-        winit::dpi::PhysicalSize::new(320, 240),
+        winit::dpi::PhysicalSize::new(args::DISPLAY_HEIGHT, args::DISPLAY_WIDTH),
         sender,
+        (args.black_lvl, args.white_lvl),
     )
     .await;
 

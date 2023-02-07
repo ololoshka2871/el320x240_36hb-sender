@@ -96,6 +96,7 @@ impl State {
         output_size: winit::dpi::PhysicalSize<u32>,
         camera_texture: &Texture,
         display_textures: &[Texture],
+        lvls: (f32, f32),
     ) -> (
         wgpu::ComputePipeline,
         Buffer,
@@ -128,6 +129,8 @@ impl State {
             label: "config buffer".into(),
             contents: bytemuck::cast_slice(&[crate::compute_config::ComputeConfig {
                 width: output_size.width,
+                black_lvl: lvls.0,
+                white_lvl: lvls.1,
             }]),
             usage: wgpu::BufferUsages::STORAGE,
         });
@@ -470,6 +473,7 @@ impl State {
             Vec<u8>,
             futures_intrusive::buffer::GrowingHeapBuf<Vec<u8>>,
         >,
+        lvls: (f32, f32),
     ) -> Self {
         let window_size = window.inner_size();
         let camera_size = camera.resolution();
@@ -550,8 +554,13 @@ impl State {
 
         //--------------------------------------------------------------------------------
 
-        let compute_stage =
-            Self::create_compute_stage(&device, output_size, &camera_texture, &display_textures);
+        let compute_stage = Self::create_compute_stage(
+            &device,
+            output_size,
+            &camera_texture,
+            &display_textures,
+            lvls,
+        );
 
         //--------------------------------------------------------------------------------
 
