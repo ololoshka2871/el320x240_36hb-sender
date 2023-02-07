@@ -736,16 +736,17 @@ impl State {
 
         // data stage
         {
+            // Заказ маппинга буфера
             self.output_copy_buffer
                 .slice(..)
-                .map_async(wgpu::MapMode::Read, move |_| {});
+                .map_async(wgpu::MapMode::Read, move |_| { /* empty */ });
 
             // Poll the device in a blocking manner so that our future resolves.
             // In an actual application, `device.poll(...)` should
             // be called in an event loop or on another thread.
             self.device.poll(wgpu::Maintain::Wait);
 
-            // Прочитать данные из выходного буфера
+            // Окно доступа к буферу
             let out_buf_view = self.output_copy_buffer.slice(..).get_mapped_range();
 
             // Преобразовать данные в вектор байтов
