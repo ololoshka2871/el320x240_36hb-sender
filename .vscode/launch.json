@@ -11,7 +11,8 @@
             "program": "target/debug/el320x240_36hb-sender",
             "args": [
                 "-p",
-                "/dev/ttyACM1",
+                //"/dev/ttyACM1",
+                "COM3",
                 "--width",
                 "640",
                 "--heigth",
