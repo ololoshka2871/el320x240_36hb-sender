@@ -2,7 +2,8 @@
 
 struct ComputeConfig {
     @location(0) width: u32,
-    @location(1) threshold: f32,
+    @location(1) height: u32,
+    @location(2) threshold: f32,
 };
 
 // Текстура видео с камеры
@@ -12,19 +13,16 @@ struct ComputeConfig {
 // Сэмплер камеры
 @group(0) @binding(1) var s_cam: sampler;
 
-// Dithering matrix
-@group(0) @binding(2) var<storage, read> dithering_matrix: array<u32>;
-
 // Output binary image
 // u8 не поддерживается, поэтому u32, за 1 вызов шейдера будет обрабатываться 32 ч/б пикселя
-@group(0) @binding(3) var<storage, read_write> output_data: array<u32>;
+@group(0) @binding(2) var<storage, read_write> output_data: array<u32>;
 
 // Config
-@group(0) @binding(4) var<storage, read> config: ComputeConfig;
+@group(0) @binding(3) var<storage, read> config: ComputeConfig;
 
 // Output texture
 // см таблицу https://gpuweb.github.io/gpuweb/#plain-color-formats какие форматы поддерживаются
-@group(1) @binding(0) var output_texture: texture_storage_2d<rgba8unorm, write>;
+@group(1) @binding(0) var output_texture: texture_storage_2d<rgba8unorm, read_write>;
 
 //------------------------------------------------------------
 
@@ -41,35 +39,91 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         2u, 2u, 2u, 2u,
     );
 
-    let start_pixel = global_id.x * 32u; // 32 пикселя обрабатывается за 1 вызов шейдера
+    let a = 7.0 / 16.0;
+    let b = 3.0 / 16.0;
+    let c = 5.0 / 16.0;
+    let d = 1.0 / 16.0;
+    
+    let matrixes = array<mat3x3<f32>, 4>(
+        // down
+        mat3x3<f32>(
+            0.0, 0.0, b,
+            0.0, 0.0, c,
+            0.0, a, d,
+        ),
+        // left
+        mat3x3<f32>(
+            0.0, 0.0, 0.0,
+            a, 0.0, 0.0,
+            d, c, b,
+        ),
+        // up
+        mat3x3<f32>(
+            d, a, 0.0,
+            c, 0.0, 0.0,
+            b, 0.0, 0.0,
+        ),
+        // right
+        mat3x3<f32>(
+            d, c, b,
+            0.0, 0.0, a,
+            0.0, 0.0, 0.0,
+        ),
+    );
+
+    let blocks_per_x = config.width / (4u + 4u);
+
+    let block_num = global_id.x;
+
+    // Начальная точка спирали
+    var x = 3u + ((4u + 4u) * block_num) % blocks_per_x;
+    var y = 1u + block_num / blocks_per_x;
+
     let output_tex_dim = vec2<f32>(textureDimensions(output_texture));
 
-    let matrix_size = f32(arrayLength(&dithering_matrix));
-    let matrix_dim = u32(sqrt(matrix_size));
+    // fill output block with gray pixels
+    {
+        var start_point = vec2<u32>(x - 2u, y - 1u);
+        for (var x_add = 0u; x_add < 4u; x_add += 1u) {
+            for (var y_add = 0u; y_add < 4u; y_add += 1u) {
+                let point_coords = start_point + vec2<u32>(x_add, y_add);
 
-    // ounput pixel chank
+                let tex_coords = vec2<f32>(point_coords) / output_tex_dim;
+                let gray = textureSampleLevel(cam_data, s_cam, tex_coords, 0.0); // textureSamp() не разрешено в compute шейдерах
+
+                // write to output texture 
+                textureStore(output_texture, vec2<i32>(i32(point_coords.x), i32(point_coords.y)), vec4<f32>(gray.r, 0.0, 0.0, 1.0));
+            }
+        }
+    }
+
+    // output pixel chank
     var output_u32 = 0u;
 
-    for (var i = 0u; i < 32u; i += 1u) {
-        let pixel = start_pixel + i;
-        let point_coords = vec2<u32>(pixel % config.width, pixel / config.width); // координаты пикселя который будем обрабатывать
-
-        let tex_coords = vec2<f32>(point_coords) / output_tex_dim;
-        let gray = textureSampleLevel(cam_data, s_cam, tex_coords, 0.0); // textureSamp() не разрешено в compute шейдерах
-
-        var res: f32;
-        if gray.r < config.threshold {
-            res = 0.0;
-        } else {
-            res = 1.0;
-
-            // write to output pixel if white
-            output_u32 |= (1u << (7u - (i % 8u))) << ((i / 8u) * 8u);
-        };
-
-        // write to output texture 
-        textureStore(output_texture, vec2<i32>(i32(point_coords.x), i32(point_coords.y)), vec4<f32>(res, 0.0, 0.0, 1.0));
-    }
+    //for (var i = 0u; i < (4u * 4u); i += 1u) {
+    //    let matrix_idx = step_types[i];
+    //    let matrix = matrixes[matrix_idx];
+    //
+    //    let point_coords = vec2<u32>(x, y);
+    //
+    //    dither(point_coords, matrix);
+    //
+    //    // переход к следующему пикселю
+    //    switch matrix_idx {
+    //        case 0u: {
+    //            y += 1u;
+    //        }
+    //        case 1u: {
+    //            x -= 1u;
+    //        }
+    //        case 2u: {
+    //            y -= 1u;
+    //        }
+    //        case 3u: {
+    //            x += 1u;
+    //        }
+    //    }
+    //}
 
     // write to output pixel chank
     output_data[global_id.x] = output_u32;

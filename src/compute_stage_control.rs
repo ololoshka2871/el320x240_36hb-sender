@@ -4,6 +4,7 @@ use crate::{args::DitherAlgorithm, texture::Texture};
 
 mod ordered;
 mod threshold;
+mod pinwheel;
 
 pub(crate) trait ComputeStageControl {
     fn configure(
@@ -31,6 +32,6 @@ pub(crate) fn create_compute_stage(
             Box::new(threshold::ThresholdComputeStageControl::new(output_size))
         }
         DitherAlgorithm::Ordered => Box::new(ordered::OrderedComputeStageControl::new(output_size)),
-        DitherAlgorithm::Pinwheel => todo!(),
+        DitherAlgorithm::Pinwheel => Box::new(pinwheel::PinwheelComputeStageControl::new(output_size)),
     }
 }

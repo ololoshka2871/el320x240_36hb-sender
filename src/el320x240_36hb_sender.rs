@@ -16,7 +16,7 @@ pub(crate) fn display_sender(
     let mut port = serialport::new(port, 15000000)
         .timeout(Duration::from_millis(5))
         .open()
-        .expect("Failed to open port");
+        .expect("Failed to open serial port");
 
     pollster::block_on(async {
         loop {
