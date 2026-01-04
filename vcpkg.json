@@ -1,0 +1,12 @@
+{
+  "dependencies": [
+    "llvm",
+    {
+      "name": "opencv4",
+      "features": [
+        "contrib",
+        "nonfree"
+      ]
+    }
+  ]
+}

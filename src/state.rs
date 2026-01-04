@@ -460,7 +460,7 @@ impl State {
             // Передаем группу привязок 0 в шейдер, зависит от нечетности кадра
             render_pass.set_bind_group(
                 0,
-                &self.fs_texture_bindings[((self.frame_counter + 1) % 2)],
+                &self.fs_texture_bindings[(self.frame_counter + 1) % 2],
                 &[],
             );
             // Передаем группу привязок 1 в шейдер (семплер)

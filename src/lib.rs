@@ -28,7 +28,7 @@ pub async fn run(args: args::Cli) {
         }
     });
 
-    let cameras = nokhwa::query(nokhwa::utils::ApiBackend::Auto).unwrap();
+    let cameras = nokhwa::query(nokhwa::utils::ApiBackend::OpenCv).unwrap();
     if cameras.is_empty() {
         println!("No web-cameras found!");
         std::process::exit(1);
