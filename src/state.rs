@@ -7,13 +7,13 @@ use winit::{dpi::PhysicalSize, event::*, window::Window};
 
 use crate::texture::Texture;
 
-pub(crate) struct State {
-    surface: wgpu::Surface,
+pub(crate) struct State<'w> {
+    surface: wgpu::Surface<'w>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     pub(crate) window_size: winit::dpi::PhysicalSize<u32>,
-    window: Window,
+    window: &'w Window,
 
     camera_texture: crate::texture::Texture,
     camera: nokhwa::Camera,
@@ -41,7 +41,7 @@ pub(crate) struct State {
     >,
 }
 
-impl State {
+impl<'w> State<'w> {
     /*
     fn load_cs_shader(
         device: &wgpu::Device,
@@ -91,7 +91,7 @@ impl State {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -158,7 +158,7 @@ impl State {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Pipeline layout"),
                 bind_group_layouts: &[&fs_texture_binding_layout, &fs_sampler_layout],
-                push_constant_ranges: &[],
+                immediate_size: 0, // ??
             });
 
         // Создание графического пайплайна
@@ -168,18 +168,20 @@ impl State {
             vertex: wgpu::VertexState {
                 // шаг 1 - вершинный шейдер
                 module: &shader_module, // единица компиляции шейдера в которой лежит вызываемая точка входа
-                entry_point: "vs_main", // название точки входа
+                entry_point: Some("vs_main"), // название точки входа
                 buffers: &[crate::verticies::MyVertex::desc()], // дескрипторы параметоров которые мы отправим в вершинный шейдер, слоты 0, 1...
+                compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 // шаг 2 - фрагментный шейдер
                 module: &shader_module, // единица компиляции шейдера в которой лежит вызываемая точка входа
-                entry_point: "fs_main", // название точки входа
+                entry_point: Some("fs_main"), // название точки входа
                 targets: &[Some(wgpu::ColorTargetState {
                     format: out_format,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
+                compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleStrip, // каждые 3 вершины образуют треугольник, с персечениями
@@ -199,7 +201,8 @@ impl State {
                 mask: !0,                         // маска мультисемплинга
                 alpha_to_coverage_enabled: false, // выключаем антиалиасинг
             },
-            multiview: None, // это нужно для нендеринга во множкство мест одновременно
+            multiview_mask: None,
+            cache: None,
         });
 
         (
@@ -212,7 +215,7 @@ impl State {
     }
 
     pub(crate) async fn new(
-        window: Window,
+        window: &'w Window,
         camera: nokhwa::Camera,
         output_size: PhysicalSize<u32>,
         output_q_sender: futures_intrusive::channel::shared::GenericSender<
@@ -228,16 +231,16 @@ impl State {
 
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
-            dx12_shader_compiler: wgpu::Dx12Compiler::Fxc,
+            ..Default::default()
         });
 
         // # Safety
         //
         // The surface needs to live as long as the window that created it.
         // State owns the window so this should be safe.
-        let surface = unsafe { instance.create_surface(&window) }.unwrap();
+        let surface: wgpu::Surface<'w> = instance.create_surface(window).unwrap();
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -249,18 +252,13 @@ impl State {
             .unwrap();
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    features: wgpu::Features::BUFFER_BINDING_ARRAY
-                        | wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY
-                        | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
-                    // WebGL doesn't support all of wgpu's features, so if
-                    // we're building for the web we'll have to disable some.
-                    limits: wgpu::Limits::default(),
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::BUFFER_BINDING_ARRAY
+                    | wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY
+                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+                ..Default::default()
+            })
             .await
             .unwrap();
 
@@ -273,6 +271,7 @@ impl State {
             present_mode: wgpu::PresentMode::Immediate,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![format],
+            desired_maximum_frame_latency: 2, // reduce latency
         };
         surface.configure(&device, &config);
 
@@ -382,7 +381,7 @@ impl State {
             let dimensions = frame.dimensions();
             self.queue.write_texture(
                 // Куда копировать данные
-                wgpu::ImageCopyTexture {
+                wgpu::TexelCopyTextureInfo {
                     aspect: wgpu::TextureAspect::All,
                     texture: &self.camera_texture.texture,
                     mip_level: 0,
@@ -391,10 +390,10 @@ impl State {
                 // Источник данных
                 frame.as_raw(),
                 // Как копировать данные, преобразования форматов, например
-                wgpu::ImageDataLayout {
+                wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: std::num::NonZeroU32::new(dimensions.0),
-                    rows_per_image: std::num::NonZeroU32::new(dimensions.1),
+                    bytes_per_row: Some(4 * dimensions.0),
+                    rows_per_image: Some(dimensions.1),
                 },
                 self.camera_texture.texture.size(), // размер текстуры
             );
@@ -416,6 +415,7 @@ impl State {
             // Вычислительный шейдер
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Compute Pass"),
+                timestamp_writes: None,
             });
 
             // Устанавливаем созданный ранее пайплайн для вычислений
@@ -449,10 +449,12 @@ impl State {
                             b: 0.3,
                             a: 1.0,
                         }),
-                        store: true,
+                        store: wgpu::StoreOp::Store,
                     },
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
+                ..Default::default()
             });
 
             // Устанавливаем созданный ранее пайплайн для рендеринга
@@ -499,7 +501,10 @@ impl State {
             // Poll the device in a blocking manner so that our future resolves.
             // In an actual application, `device.poll(...)` should
             // be called in an event loop or on another thread.
-            self.device.poll(wgpu::Maintain::Wait);
+            self.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
 
             // Окно доступа к буферу
             let out_buf_view = self.output_copy_buffer.slice(..).get_mapped_range();

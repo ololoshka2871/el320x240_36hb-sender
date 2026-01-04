@@ -55,6 +55,7 @@ impl Texture {
             mip_level_count: None,
             base_array_layer: 0,
             array_layer_count: None,
+            usage: None,
         });
         // Сэмплер - это конвертер текстурная координата -> цвет пикселя
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -63,7 +64,7 @@ impl Texture {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear, // Фильтр для увеличения, что делать если камера близко и надо вернуть цвет между физическими пикселями текстуры
             min_filter: wgpu::FilterMode::Nearest, // Фильтр для уменьшения, что делать если камера далеко и в 1 фрагмент попадает сразу много физических пикселей текстуры
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -105,7 +106,7 @@ impl Texture {
         // load data from diffuse_rgba to diffuse_texture allocated in GPU memory above
         queue.write_texture(
             // Куда копировать данные
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 aspect: wgpu::TextureAspect::All,
                 texture: &texture,
                 mip_level: 0,
@@ -114,10 +115,10 @@ impl Texture {
             // Источник данных
             &rgba,
             // Как копировать данные, преобразования форматов, например
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: std::num::NonZeroU32::new(4 * dimensions.0),
-                rows_per_image: std::num::NonZeroU32::new(dimensions.1),
+                bytes_per_row: Some(4 * dimensions.0),
+                rows_per_image: Some(dimensions.1),
             },
             size, // размер текстуры
         );
@@ -131,7 +132,7 @@ impl Texture {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear, // Фильтр для увеличения, что делать если камера близко и надо вернуть цвет между физическими пикселями текстуры
             min_filter: wgpu::FilterMode::Nearest, // Фильтр для уменьшения, что делать если камера далеко и в 1 фрагмент попадает сразу много физических пикселей текстуры
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 

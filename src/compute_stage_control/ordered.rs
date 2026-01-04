@@ -99,7 +99,7 @@ impl super::ComputeStageControl for OrderedComputeStageControl {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -250,7 +250,7 @@ impl super::ComputeStageControl for OrderedComputeStageControl {
         let cs_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Compute shader pipeline layout"),
             bind_group_layouts: &[&cs_const_biding_layout, &cs_output_buffered_binding_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         // Создание пайплайна вычислительного шейдера
@@ -258,7 +258,9 @@ impl super::ComputeStageControl for OrderedComputeStageControl {
             label: Some("Compute shader pipeline"),
             layout: Some(&cs_pipeline_layout),
             module: &cs_module,
-            entry_point: "main",
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
         });
 
         (

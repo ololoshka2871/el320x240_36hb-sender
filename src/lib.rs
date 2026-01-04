@@ -9,15 +9,43 @@ mod verticies;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
 };
 
 use nokhwa::utils::*;
 
+struct App<'a> {
+    window: Option<winit::window::Window>,
+
+    state: Option<state::State<'a>>,
+}
+
+impl<'a> winit::application::ApplicationHandler for App<'a> {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let window_attributes = winit::window::WindowAttributes::default();
+
+        if self.window.is_none() {
+            self.window.replace(event_loop.create_window(window_attributes).unwrap());
+
+            self.state.replace(state::State::new(
+                &self.window.as_ref().unwrap(),
+                camera,
+                winit::dpi::PhysicalSize::new(args::DISPLAY_WIDTH, args::DISPLAY_HEIGHT),
+                sender,
+                args.filter_algorithm,
+                (args.black_lvl, args.white_lvl),
+            ).await);
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, _: WindowId, event: WindowEvent) {
+
+    }
+}
+
 pub async fn run(args: args::Cli) {
     env_logger::init();
 
-    let event_loop = EventLoop::new();
+    let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
 
     // We need to initialize Nokhwa before we can use it
@@ -58,7 +86,7 @@ pub async fn run(args: args::Cli) {
 
     // State::new uses async code, so we're going to wait for it to finish
     let mut state = state::State::new(
-        window,
+        &window,
         camera,
         winit::dpi::PhysicalSize::new(args::DISPLAY_WIDTH, args::DISPLAY_HEIGHT),
         sender,
