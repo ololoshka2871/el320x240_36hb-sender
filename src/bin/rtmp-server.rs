@@ -68,7 +68,11 @@ async fn main() -> ez_ffmpeg::error::Result<()> {
         .set_input_opt("flags", "low_delay");
 
     // 2. todo: filters from config, like "diter" and so on
-    let filter = format!("format=gray");
+    let filter = r#"[0]format=monow[a];
+        [a]split[m][t];
+        [t]palettegen=max_colors=2:reserve_transparent=0:stats_mode=single[p];
+        [m][p]paletteuse=dither=bayer:new=1[u8];
+        [u8]format=gray"#;
 
     let (mut reader, mut writer) = tokio::io::simplex(150 * 1024); // Specify a buffer capacity
 
