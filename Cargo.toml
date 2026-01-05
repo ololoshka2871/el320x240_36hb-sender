@@ -28,7 +28,9 @@ futures-intrusive = "0.5"
 parking_lot = "0.12"
 const_format = { version = "0.2" }
 
-ez-ffmpeg = { version = "0.6", features = ["rtmp", "static", "async"] }
+ez-ffmpeg = { version = "0.6.0", features = ["static", "async"] }
+ffmpeg-sys-next = "7.1.0"
+tokio = { version = "1", features = ["full"] }
 
 [profile.release]
 debug = true # добавлять отладочные символы. Не влияет на размер исполняемого кода, зато работает дебаг

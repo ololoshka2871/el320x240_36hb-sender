@@ -8,17 +8,11 @@
             "name": "Launch Debug",
             "type": "lldb",
             "request": "launch",
-            "program": "target/debug/el320x240_36hb-sender",
+            "program": "target/debug/rtmp-server",
             "args": [
-                "-p",
+                "-s",
                 //"/dev/ttyACM1",
-                "COM3",
-                "--width",
-                "640",
-                "--heigth",
-                "480",
-                "-f",
-                "Ordered"
+                "COM7",
             ],
             "cwd": "${workspaceFolder}",
         },
@@ -28,7 +22,7 @@
             "request": "launch",
             "program": "target/release/el320x240_36hb-sender",
             "args": [
-                "-p",
+                "-s",
                 "/dev/ttyACM1"
             ],
             "cwd": "${workspaceFolder}",
