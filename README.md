@@ -39,3 +39,17 @@
     4. Если яркость пикселя 1.0, то в стореджбуфер в нухный бит записывается 1.
 5. Читаем стореджбуфер и отправляем его в `el320x240_36hb` через виртуальный COM-порт.
 6. Фрагментный шейдер графического пайплайна читает выходную текстуру и отображает её на экране в окне предпросмотра.
+
+## Build
+1. Install [vcpkg](https://github.com/microsoft/vcpkg):
+    ```ps
+    git clone https://github.com/microsoft/vcpkg.git
+    cd vcpkg
+    .\bootstrap-vcpkg.bat
+    ```
+2. Add `vcpkg` to system `PATH`
+3. In this project dirrectory: `vcpkg integrate install`
+4. Build and Install `ffmpeg`: `vcpkg install ffmpeg:x64-windows-static-md`
+5. Install [clang](https://github.com/llvm/llvm-project/releases)
+6. Add env to build: `$env:LIBCLANG_PATH="C:/path/to/clang/bin"`
+7. Buld the project `cargo build --release`

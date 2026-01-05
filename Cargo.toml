@@ -10,7 +10,7 @@ resolver="2"
 crate-type = ["rlib"]
 
 [dependencies]
-nokhwa = { version = "0.10.10", features = ["input-native", "input-opencv"] }
+nokhwa = { version = "0.10.10", features = ["input-native"] }
 flume = "0.12"
 structopt = { version = "0.3", default-features = false }
 serialport = { version = "4.2", default-features = false }
@@ -27,6 +27,8 @@ fps_counter = "3.0"
 futures-intrusive = "0.5"
 parking_lot = "0.12"
 const_format = { version = "0.2" }
+
+ez-ffmpeg = { version = "0.6", features = ["rtmp", "static", "async"] }
 
 [profile.release]
 debug = true # добавлять отладочные символы. Не влияет на размер исполняемого кода, зато работает дебаг
