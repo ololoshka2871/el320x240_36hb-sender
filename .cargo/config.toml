@@ -1,0 +1,10 @@
+[build]
+rustflags = [
+    "-C", "link-args=strmiids.lib",
+    "-C", "link-args=mfplat.lib",
+    "-C", "link-args=Vfw32.lib",
+    "-C", "link-args=Mfuuid.lib",
+    "-C", "link-args=Shlwapi.lib",
+    "-C", "link-args=Gdi32.lib",
+    "-C", "link-args=OleAut32.lib",
+]
