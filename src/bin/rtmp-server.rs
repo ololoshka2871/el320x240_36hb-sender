@@ -53,7 +53,8 @@ async fn main() -> ez_ffmpeg::error::Result<()> {
     let input: Input = Input::from(format!("rtmp://127.0.0.1:{}", args.rtmp_port))
         .set_readrate(1.0)
         .set_input_opt("listen", "1")
-        .set_input_opt("flags", "low_delay");
+        .set_input_opt("flags", "nobuffer")
+        .set_input_opt("tune", "zerolatency");
 
     // 2. todo: filters from config, like "diter" and so on
     let filter = format!(
