@@ -1,6 +1,6 @@
 # OBS virtual camera to el320x240_36hb
 
-# Setup
+## Setup
 * Install [OBS](https://obsproject.com/)
 * Setup stream target rtmp://127.0.0.1:9009
 * Setup virtual scene
