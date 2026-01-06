@@ -8,7 +8,7 @@
             "name": "Launch Debug",
             "type": "lldb",
             "request": "launch",
-            "program": "target/debug/rtmp-server",
+            "program": "target/debug/rtmp-server.exe",
             "args": [
                 "-s",
                 //"/dev/ttyACM1",
@@ -20,10 +20,11 @@
             "name": "Launch Release",
             "type": "lldb",
             "request": "launch",
-            "program": "target/release/el320x240_36hb-sender",
+            "program": "target/release/rtmp-server.exe",
             "args": [
                 "-s",
-                "/dev/ttyACM1"
+                //"/dev/ttyACM1"
+                "COM7"
             ],
             "cwd": "${workspaceFolder}",
         },

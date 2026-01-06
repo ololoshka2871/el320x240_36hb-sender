@@ -5,6 +5,7 @@ mod el320x240_36hb_sender;
 mod state;
 mod texture;
 mod verticies;
+pub mod ffmpeg_compand;
 
 use winit::{
     event::*,

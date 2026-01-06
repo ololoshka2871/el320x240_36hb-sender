@@ -6,6 +6,8 @@ use serialport::SerialPort;
 use structopt::StructOpt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use el320x240_36hb_sender::ffmpeg_compand::{DitherAlgorithm, TempPixelFormat};
+
 pub const DISPLAY_WIDTH: u32 = 320;
 pub const DISPLAY_HEIGHT: u32 = 240;
 pub const DISPLAY_FPS: u32 = 30;
@@ -34,27 +36,13 @@ pub struct Cli {
     #[structopt(short, default_value = "/dev/ttyACM0")]
     pub serial_port: String,
 
-    /*
     /// use filter algorithm
-    #[structopt(short, default_value = "Threshold")]
+    #[structopt(short, default_value = "bayer")]
     pub filter_algorithm: DitherAlgorithm,
-    */
-    /// level of black color, 0.0-1.0
-    #[structopt(long, default_value = "0.0", parse(try_from_str = parse_h_val))]
-    pub black_lvl: f32,
 
-    /// level of white color, 0.0-1.0
-    #[structopt(long, default_value = "1.0", parse(try_from_str = parse_h_val))]
-    pub white_lvl: f32,
-}
-
-fn parse_h_val(s: &str) -> Result<f32, String> {
-    let val = s.parse::<f32>().map_err(|e| e.to_string())?;
-    if val < 0.0 || val > 1.0 {
-        Err(format!("Value must be in range 0.0-1.0, got {val}"))
-    } else {
-        Ok(val)
-    }
+    /// temp pixel format
+    #[structopt(short, default_value = "monob")]
+    pub temp_pixel_format: TempPixelFormat,
 }
 
 #[tokio::main]
@@ -68,12 +56,17 @@ async fn main() -> ez_ffmpeg::error::Result<()> {
         .set_input_opt("flags", "low_delay");
 
     // 2. todo: filters from config, like "diter" and so on
-    let filter = r#"[0]format=monow[a];
+    let filter = format!(
+        r#"
+        [0]format={}[a];
         [a]split[m][t];
         [t]palettegen=max_colors=2:reserve_transparent=0:stats_mode=single[p];
-        [m][p]paletteuse=dither=bayer:new=1[u8];
-        [u8]format=gray"#;
-
+        [m][p]paletteuse=dither={}:new=1[g];
+        [g]format=gray
+    "#,
+        <TempPixelFormat as Into<&'static str>>::into(args.temp_pixel_format),
+        <DitherAlgorithm as Into<&'static str>>::into(args.filter_algorithm)
+    );
     let (mut reader, mut writer) = tokio::io::simplex(150 * 1024); // Specify a buffer capacity
 
     // 3. output: Define the write callback for custom output handling
