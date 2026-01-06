@@ -6,7 +6,7 @@ use serialport::SerialPort;
 use structopt::StructOpt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use el320x240_36hb_sender::ffmpeg_compand::{DitherAlgorithm, TempPixelFormat};
+use el320x240_36hb_sender::{DitherAlgorithm, TempPixelFormat};
 
 pub const DISPLAY_WIDTH: u32 = 320;
 pub const DISPLAY_HEIGHT: u32 = 240;
@@ -14,7 +14,7 @@ pub const DISPLAY_FPS: u32 = 30;
 
 #[allow(unused)]
 #[derive(Debug, StructOpt)]
-#[structopt(about = "Send rtmp stream from OBS el320x240_36hb over virtual serial port")]
+#[structopt(about = "Send rtmp stream to el320x240_36hb over virtual serial port")]
 pub struct Cli {
     /// width
     #[structopt(long, default_value = concatcp!(DISPLAY_WIDTH))]
@@ -125,6 +125,8 @@ async fn main() -> ez_ffmpeg::error::Result<()> {
             }
         }
     });
+
+    println!("Starting RTMP server on port 127.0.0.1:{}", args.rtmp_port);
 
     // 4. Build and run the FFmpeg context
     FfmpegContext::builder()

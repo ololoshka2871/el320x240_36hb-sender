@@ -1,36 +1,24 @@
 [package]
 name = "el320x240_36hb-sender"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["ololoshka2871"]
-edition = "2018"
+edition = "2024"
 readme = "README.md"
-resolver="2"
 
 [lib]
 crate-type = ["rlib"]
 
 [dependencies]
-nokhwa = { version = "0.10.10", features = ["input-native"] }
-flume = "0.12"
-structopt = { version = "0.3", default-features = false }
-serialport = { version = "4.2", default-features = false }
 bytes = { version = "1", default-features = false }
-winit = "0.27"
-wgpu = "0.15"
-futures = "0.3"
-env_logger = "0.11"
-pollster = "0.4"
-bytemuck = { version = "1.13", features = ["derive"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
-anyhow = "1.0"
-fps_counter = "3.0"
-futures-intrusive = "0.5"
-parking_lot = "0.12"
+structopt = { version = "0.3", default-features = false }
 const_format = { version = "0.2" }
+
+serialport = { version = "4.2", default-features = false }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
 
 ez-ffmpeg = { version = "0.6.0", features = ["static", "async"] }
 ffmpeg-sys-next = "7.1.0"
-tokio = { version = "1", features = ["full"] }
 
 [profile.release]
 debug = true # добавлять отладочные символы. Не влияет на размер исполняемого кода, зато работает дебаг
