@@ -1,0 +1,7 @@
+{
+    "wgsl-analyzer.diagnostics.typeErrors": true,
+    "wgsl-analyzer.diagnostics.nagaVersion": "main",
+    "rust-analyzer.cargo.extraEnv": {
+        "LIBCLANG_PATH": "C:\\clang+llvm-20.1.6-x86_64-pc-windows-msvc\\bin"
+    }
+}

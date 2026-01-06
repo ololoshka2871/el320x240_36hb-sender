@@ -1,2 +1,7 @@
 **/target
 **/Cargo.lock
+**/*.bak
+**/*.*_
+
+## vcpgk related
+vcpkg_installed/

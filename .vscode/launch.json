@@ -8,17 +8,33 @@
             "name": "Launch Debug",
             "type": "lldb",
             "request": "launch",
-            "program": "target/debug/el320x240_36hb-sender",
-            "args": ["-p", "/dev/ttyACM1"],
+            "program": "target/debug/rtmp-server.exe",
+            "args": [
+                "-s",
+                //"/dev/ttyACM1",
+                "COM7",
+            ],
             "cwd": "${workspaceFolder}",
         },
         {
             "name": "Launch Release",
             "type": "lldb",
             "request": "launch",
-            "program": "target/release/el320x240_36hb-sender",
-            "args": ["-p", "/dev/ttyACM1"],
+            "program": "target/release/rtmp-server.exe",
+            "args": [
+                "-s",
+                //"/dev/ttyACM1"
+                "COM7"
+            ],
             "cwd": "${workspaceFolder}",
-        }
+        },
+        {
+            "name": "pinwheel.py",
+            "type": "python",
+            "request": "launch",
+            "program": "shader-algo-debug/pinwheel.py",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
     ]
 }
