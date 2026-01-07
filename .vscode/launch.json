@@ -11,7 +11,6 @@
             "program": "target/debug/rtmp-server.exe",
             "args": [
                 "-s",
-                //"/dev/ttyACM1",
                 "COM7",
             ],
             "cwd": "${workspaceFolder}",
@@ -23,18 +22,9 @@
             "program": "target/release/rtmp-server.exe",
             "args": [
                 "-s",
-                //"/dev/ttyACM1"
                 "COM7"
             ],
             "cwd": "${workspaceFolder}",
-        },
-        {
-            "name": "pinwheel.py",
-            "type": "python",
-            "request": "launch",
-            "program": "shader-algo-debug/pinwheel.py",
-            "console": "integratedTerminal",
-            "justMyCode": true
-        },
+        }
     ]
 }

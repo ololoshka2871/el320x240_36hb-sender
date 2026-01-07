@@ -1,0 +1,29 @@
+name: CI
+on: 
+  push:
+    tags:
+      - 'v*'
+
+env:
+   GIT_SSL_NO_VERIFY: true
+   NODE_TLS_REJECT_UNAUTHORIZED: 0
+
+jobs:
+  build-windows:
+    runs-on: windows-native-libclang-ffmpeg
+    steps:                 
+      - name: Clone repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check Build
+        run: |
+          cargo build --release   
+
+      - uses: akkuman/gitea-release-action@v1
+        with:
+          body: Стабильная версия с тегом ${{ github.ref }}
+          prerelease: false
+          files: |
+              target/release/rtmp-server.exe

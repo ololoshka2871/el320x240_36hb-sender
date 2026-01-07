@@ -1,0 +1,24 @@
+name: Pull Request Workflow
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - master
+      - '*/*'
+
+env:
+   GIT_SSL_NO_VERIFY: true
+   NODE_TLS_REJECT_UNAUTHORIZED: 0
+
+jobs:
+  build-windows:
+    runs-on: windows-native-libclang-ffmpeg
+    steps:                 
+      - name: Clone repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check Build
+        run: |
+          cargo build --release         

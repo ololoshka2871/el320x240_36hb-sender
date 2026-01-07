@@ -17,12 +17,8 @@ serialport = { version = "4.2", default-features = false }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 
-ez-ffmpeg = { version = "0.6.0", features = ["static", "async"] }
-ffmpeg-sys-next = "7.1.0"
+ez-ffmpeg = { version = "0.6", features = ["static", "async"] }
+ffmpeg-sys-next = "7.1"
 
 [profile.release]
 debug = true # добавлять отладочные символы. Не влияет на размер исполняемого кода, зато работает дебаг
-
-[features]
-default = ["diffuse8x8"]
-diffuse8x8 = []
