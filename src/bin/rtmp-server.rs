@@ -59,22 +59,37 @@ async fn main() -> ez_ffmpeg::error::Result<()> {
     // 2. todo: filters from config, like "diter" and so on
     let filter = format!(
         r#"
-        [0]format={}[a];
+        [0]scale={}x{}[s];
+        [s]format={}[a];
         [a]split[m][t];
         [t]palettegen=max_colors=2:reserve_transparent=0:stats_mode=single[p];
         [m][p]paletteuse=dither={}:new=1[g];
         [g]format=gray
     "#,
+        args.width,
+        args.heigth,
         <TempPixelFormat as Into<&'static str>>::into(args.temp_pixel_format),
-        <DitherAlgorithm as Into<&'static str>>::into(args.filter_algorithm)
+        <DitherAlgorithm as Into<&'static str>>::into(args.filter_algorithm),
     );
     let (mut reader, mut writer) = tokio::io::simplex(150 * 1024); // Specify a buffer capacity
 
     // 3. output: Define the write callback for custom output handling
+    let mut _now = tokio::time::Instant::now();
     let write_callback = move |buf: &[u8]| -> i32 {
         if buf.is_empty() {
             return 0;
         }
+
+        /*
+        let elapsed = _now.elapsed();
+        println!(
+            "Write callback called with {} bytes after {:?}",
+            buf.len(),
+            elapsed
+        );
+
+        _now = tokio::time::Instant::now();
+        */
 
         match futures::executor::block_on(writer.write_all(buf)) {
             Err(_e) => ffmpeg_sys_next::AVERROR(ffmpeg_sys_next::AVFMT_FLAG_NOBUFFER),
